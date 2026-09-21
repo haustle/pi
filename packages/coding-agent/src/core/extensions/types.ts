@@ -297,6 +297,14 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+	/**
+	 * Scroll the interactive transcript to the component rendered for a session entry.
+	 *
+	 * Returns whether the transcript moved. Returns false in modes without a scrollable
+	 * transcript (regular TUI mode, RPC, print, JSON), for entries that are not rendered
+	 * (for example non-message entries), and when the entry is no longer in the transcript.
+	 */
+	revealEntry(entryId: string): boolean;
 }
 
 // ============================================================================
