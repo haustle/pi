@@ -13,6 +13,7 @@ Start with `ctx.ui` methods from an [extension](extensions.md#interact-with-the-
 | Persistent content near the editor | `ctx.ui.setWidget()` |
 | Replace the header, footer, or editor | The corresponding `ctx.ui` component factory |
 | Temporary interactive screen or overlay | `ctx.ui.custom()` |
+| Scroll the transcript to a session entry | `ctx.ui.revealEntry()` (fullscreen only) |
 | Custom rendering for a tool or session entry | An extension renderer |
 
 These APIs receive Pi’s active theme and keybindings where needed. Do not create a second terminal renderer inside an extension.

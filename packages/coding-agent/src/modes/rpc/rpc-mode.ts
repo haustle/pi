@@ -308,6 +308,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
 		},
+
+		revealEntry(_entryId: string): boolean {
+			// No transcript to scroll in RPC mode
+			return false;
+		},
 	});
 
 	runtimeHost.setRebindSession(async () => {

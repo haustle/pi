@@ -421,6 +421,8 @@ export class InteractiveMode {
 	private chatContainer: Container;
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
+	/** Component currently rendering each message, used to scroll the transcript to an entry. */
+	private messageComponents = new Map<AgentMessage, Component>();
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -2584,6 +2586,7 @@ export class InteractiveMode {
 			},
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
+			revealEntry: (entryId) => this.revealEntry(entryId),
 		};
 	}
 
@@ -3468,6 +3471,8 @@ export class InteractiveMode {
 						this.maybeShowThinkingDropNotice(this.streamingMessage);
 						this.maybeShowCacheMissNotice(this.streamingMessage);
 					}
+					// The streaming component stays in the transcript, so remember it for revealEntry.
+					this.messageComponents.set(event.message, this.streamingComponent);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 					this.footer.invalidate();
@@ -3735,6 +3740,7 @@ export class InteractiveMode {
 	}
 
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+		const firstChildIndex = this.chatContainer.children.length;
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
@@ -3841,6 +3847,19 @@ export class InteractiveMode {
 				const _exhaustive: never = message;
 			}
 		}
+		this.rememberMessageComponent(message, firstChildIndex);
+	}
+
+	/**
+	 * Remember which component renders a message so the transcript can be scrolled to it.
+	 *
+	 * Messages that render nothing (system messages, hidden custom messages, tool results)
+	 * add no children, and spacers are skipped so the reveal lands on content.
+	 */
+	private rememberMessageComponent(message: AgentMessage, firstChildIndex: number): void {
+		const added = this.chatContainer.children.slice(firstChildIndex);
+		const anchor = added.find((child) => !(child instanceof Spacer)) ?? added[0];
+		if (anchor) this.messageComponents.set(message, anchor);
 	}
 
 	private renderSessionItems(
@@ -4068,6 +4087,49 @@ export class InteractiveMode {
 			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
 			this.showStatus(`Session compacted ${times}`);
 		}
+	}
+
+	/**
+	 * Scroll the transcript so a session entry is visible.
+	 *
+	 * The transcript only scrolls in fullscreen mode, where it lives in a ScrollView.
+	 * Regular mode writes the transcript into the terminal scrollback, which the process
+	 * cannot move, so this reports false instead of pretending to have scrolled.
+	 */
+	revealEntry(entryId: string): boolean {
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry?.type !== "message") return false;
+
+		const component = this.messageComponents.get(entry.message);
+		if (!component || !this.chatContainer.children.includes(component)) return false;
+
+		const scrollView = this.transcriptScrollView;
+		if (!scrollView) return false;
+
+		const offset = this.transcriptOffsetOf(component, scrollView.getContentWidth(this.ui.terminal.columns));
+		// Keep the entry off the top edge so the messages before it stay in view.
+		const context = Math.floor(scrollView.viewportHeight / 3);
+		// Follow-end only re-engages when this lands at the end, so revealing the newest
+		// message restores auto-scroll and revealing an older one stays where it is.
+		scrollView.scrollTo(offset - context);
+		return true;
+	}
+
+	/** Rows rendered above `component` in the transcript document. */
+	private transcriptOffsetOf(component: Component, width: number): number {
+		const chatIndex = this.documentContainer.children.indexOf(this.chatContainer);
+		if (chatIndex < 0) return 0;
+
+		let offset = 0;
+		for (const child of this.documentContainer.children.slice(0, chatIndex)) {
+			offset += child.render(width).length;
+		}
+		const index = this.chatContainer.children.indexOf(component);
+		if (index < 0) return offset;
+		for (const child of this.chatContainer.children.slice(0, index)) {
+			offset += child.render(width).length;
+		}
+		return offset;
 	}
 
 	private renderProjectTrustWarningIfNeeded(): void {
