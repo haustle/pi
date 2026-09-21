@@ -21,6 +21,8 @@ export interface AppKeybindings {
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
+	"app.palette.open": true;
+	"app.threads.open": true;
 	"app.tools.expand": true;
 	"app.thinking.toggle": true;
 	"app.session.toggleNamedFilter": true;
@@ -114,7 +116,9 @@ export const KEYBINDINGS = {
 		description: "Cycle to previous model",
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
-	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
+	"app.palette.open": { defaultKeys: "ctrl+o", description: "Open command palette" },
+	"app.threads.open": { defaultKeys: "ctrl+r", description: "Switch thread" },
+	"app.tools.expand": { defaultKeys: "ctrl+shift+o", description: "Toggle tool output" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",

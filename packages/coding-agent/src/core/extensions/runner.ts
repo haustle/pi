@@ -18,6 +18,7 @@ import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type { SessionManager } from "../session-manager.ts";
+import type { SlashCommandInfo } from "../slash-commands.ts";
 import {
 	type BuildSystemPromptOptions,
 	buildSystemPrompt,
@@ -848,6 +849,11 @@ export class ExtensionRunner {
 	getRegisteredCommands(): ResolvedCommand[] {
 		this.commandDiagnostics = [];
 		return this.resolveRegisteredCommands();
+	}
+
+	/** Every non-builtin slash command the session offers: extensions, prompt templates, and skills. */
+	getCommands(): SlashCommandInfo[] {
+		return this.runtime.getCommands();
 	}
 
 	getCommandDiagnostics(): ResourceDiagnostic[] {

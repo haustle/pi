@@ -139,6 +139,7 @@ import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
+import { CommandPalette, type PaletteEntry, paletteMaxVisible } from "./components/command-palette.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
@@ -163,7 +164,7 @@ import {
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
-import { SessionSelectorComponent } from "./components/session-selector.ts";
+import { formatSessionDate, SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
@@ -292,6 +293,14 @@ function isUsageSessionEntry(item: RenderSessionItem): item is Extract<SessionEn
 // EIO: tty reads/ioctls from an orphaned background process group, or writes after hangup.
 // ENOTTY: the tty was revoked (macOS) and stdin is no longer a terminal.
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN", "ENOTTY"]);
+/** How many recent threads the command palette offers. */
+const PALETTE_THREAD_LIMIT = 25;
+/** Fewer threads inline so commands stay visible in the mixed palette. */
+const PALETTE_THREAD_LIMIT_INLINE = 6;
+const PALETTE_THREADS_TITLE = "Threads";
+
+/** `threads` is the thread switcher bound to app.threads.open; `all` adds commands and toggles. */
+type PaletteMode = "all" | "threads";
 
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
@@ -457,6 +466,7 @@ export class InteractiveMode {
 	private chatContainer: Container;
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
+	private paletteHandle: OverlayHandle | undefined;
 	/** Component currently rendering each message, used to scroll the transcript to an entry. */
 	private messageComponents = new Map<AgentMessage, Component>();
 	private fullscreenLayoutRoot: Component | undefined;
@@ -1037,6 +1047,7 @@ export class InteractiveMode {
 						"to cycle models",
 					),
 					hint("app.model.select", "to select model"),
+					hint("app.palette.open", "for the command palette"),
 					hint("app.tools.expand", "to expand tools"),
 					hint("app.thinking.toggle", "to expand thinking"),
 					hint("app.editor.external", "for external editor"),
@@ -1054,6 +1065,7 @@ export class InteractiveMode {
 					rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
 					rawKeyHint("/", "commands"),
 					rawKeyHint("!", "bash"),
+					hint("app.palette.open", "palette"),
 					hint("app.tools.expand", "more"),
 				].join(theme.fg("muted", " · "));
 			const compactOnboarding = () =>
@@ -1065,8 +1077,7 @@ export class InteractiveMode {
 				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
-				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
-				this.getStartupExpansionState(),
+				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,				this.getStartupExpansionState(),
 				1,
 				0,
 			);
@@ -3109,6 +3120,8 @@ export class InteractiveMode {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
+		this.defaultEditor.onAction("app.palette.open", () => void this.openCommandPalette({ mode: "all" }));
+		this.defaultEditor.onAction("app.threads.open", () => void this.openCommandPalette({ mode: "threads" }));
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
@@ -4241,6 +4254,7 @@ export class InteractiveMode {
 		}
 	}
 
+	/**
 	/**
 	 * Scroll the transcript so a session entry is visible.
 	 *
@@ -5765,6 +5779,122 @@ export class InteractiveMode {
 			};
 			return { component: selector, focus: selector };
 		});
+	}
+
+	/**
+	 * Entries for the command palette. `threads` keeps only the thread switcher for `app.threads.open`.
+	 */
+	private async buildPaletteEntries({ mode }: { mode: PaletteMode }): Promise<PaletteEntry[]> {
+		const entries: PaletteEntry[] = [];
+
+		if (mode === "threads") {
+			entries.push({
+				category: "thread",
+				label: "New thread",
+				pinned: true,
+				labelFromQuery: (query) => (query.trim() ? `New thread: ${query}` : "New thread"),
+				run: (query) => this.handleNewThreadFromPalette(query),
+			});
+		}
+
+		const sessions = await SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir());
+		const threadLimit = mode === "threads" ? PALETTE_THREAD_LIMIT : PALETTE_THREAD_LIMIT_INLINE;
+		for (const session of sessions.slice(0, threadLimit)) {
+			entries.push({
+				category: "thread",
+				label: session.name ?? session.firstMessage,
+				keywords: session.cwd,
+				hint: { type: "text", text: formatSessionDate(session.modified) },
+				run: () => void this.handleResumeSession(session.path),
+			});
+		}
+
+		if (mode === "threads") return entries;
+
+		for (const command of BUILTIN_SLASH_COMMANDS) {
+			entries.push({
+				category: "command",
+				label: `/${command.name}`,
+				keywords: command.description,
+				run: () => void this.defaultEditor.onSubmit?.(`/${command.name}`),
+			});
+		}
+
+		for (const command of this.session.extensionRunner.getCommands()) {
+			entries.push({
+				category: command.source,
+				label: `/${command.name}`,
+				keywords: command.description,
+				run: () => void this.defaultEditor.onSubmit?.(`/${command.name}`),
+			});
+		}
+
+		entries.push(
+			{
+				category: "editor",
+				label: "Toggle tool output",
+				hint: { type: "key", keybinding: "app.tools.expand" },
+				run: () => this.toggleToolOutputExpansion(),
+			},
+			{
+				category: "editor",
+				label: "Toggle thinking blocks",
+				hint: { type: "key", keybinding: "app.thinking.toggle" },
+				run: () => this.toggleThinkingBlockVisibility(),
+			},
+			{
+				category: "editor",
+				label: "Cycle thinking level",
+				hint: { type: "key", keybinding: "app.thinking.cycle" },
+				run: () => this.cycleThinkingLevel(),
+			},
+			{
+				category: "editor",
+				label: "Open external editor",
+				hint: { type: "key", keybinding: "app.editor.external" },
+				run: () => void this.handleOpenExternalEditor(),
+			},
+		);
+
+		return entries;
+	}
+
+	/**
+	 * Start a fresh thread and keep what was typed in the editor, so nothing reaches the
+	 * model until it is reviewed and sent.
+	 */
+	private async handleNewThreadFromPalette(query: string): Promise<void> {
+		await this.handleClearCommand();
+		if (query.trim()) this.editor.setText(query);
+	}
+
+	/** Command palette overlay: threads, commands, and editor toggles in one fuzzy list. */
+	private async openCommandPalette({ mode }: { mode: PaletteMode }): Promise<void> {
+		const entries = await this.buildPaletteEntries({ mode });
+		if (entries.length === 0) return;
+
+		// Key repeat can fire this again before the session list resolves, so replace the old overlay.
+		this.paletteHandle?.hide();
+		const handle = this.ui.showOverlay(
+			new CommandPalette({
+				entries,
+				maxVisible: paletteMaxVisible(this.ui.terminal.rows),
+				title: mode === "threads" ? PALETTE_THREADS_TITLE : undefined,
+				onAccept: (entry, query) => {
+					// Close first: the entry may open another dialog, which owns the editor dock.
+					this.paletteHandle = undefined;
+					handle.hide();
+					void entry.run(query);
+				},
+				onCancel: () => {
+					this.paletteHandle = undefined;
+					handle.hide();
+				},
+			}),
+			{ anchor: "center", width: "80%", minWidth: 50, maxHeight: "90%", margin: 1 },
+		);
+		this.paletteHandle = handle;
+		this.ui.requestRender();
 	}
 
 	private showSessionSelector(): void {

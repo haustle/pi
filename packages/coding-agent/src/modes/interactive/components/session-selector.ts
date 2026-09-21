@@ -32,7 +32,7 @@ function shortenPath(path: string): string {
 	return path;
 }
 
-function formatSessionDate(date: Date): string {
+export function formatSessionDate(date: Date): string {
 	const now = new Date();
 	const diffMs = now.getTime() - date.getTime();
 	const diffMins = Math.floor(diffMs / 60000);
