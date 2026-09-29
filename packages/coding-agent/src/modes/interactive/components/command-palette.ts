@@ -37,6 +37,8 @@ export type PaletteCategory = "thread" | "command" | "editor" | "extension" | "p
 export interface PaletteEntry {
 	category: PaletteCategory;
 	label: string;
+	/** Stable identity across `setEntries` refreshes. Defaults to category and label. */
+	key?: string;
 	/** Extra fuzzy-match text, typically the entry's description. */
 	keywords?: string;
 	hint?: PaletteHint;
@@ -94,7 +96,7 @@ export function paletteWindow(total: number, selected: number, maxVisible: numbe
 }
 
 export class CommandPalette implements Component, Focusable {
-	private readonly entries: readonly PaletteEntry[];
+	private entries: readonly PaletteEntry[];
 	private readonly maxVisible: number;
 	private readonly title: string;
 	private readonly onAccept: (entry: PaletteEntry, query: string) => void;
@@ -239,6 +241,20 @@ export class CommandPalette implements Component, Focusable {
 		const next = Math.max(0, Math.min(this.filtered.length - 1, this.selectedIndex + delta));
 		if (next === this.selectedIndex) return;
 		this.selectedIndex = next;
+		this.invalidate();
+	}
+
+	/**
+	 * Replace the entries while the palette is open, keeping the query and, when it is still
+	 * listed, the selected row. Used to refresh live thread statuses.
+	 */
+	setEntries(entries: readonly PaletteEntry[]): void {
+		const selected = this.filtered[this.selectedIndex];
+		this.entries = entries;
+		this.filtered = filterPaletteEntries(entries, this.input.getValue());
+		const identity = (entry: PaletteEntry) => entry.key ?? `${entry.category}\u0000${entry.label}`;
+		const kept = selected ? this.filtered.findIndex((entry) => identity(entry) === identity(selected)) : -1;
+		this.selectedIndex = kept === -1 ? initialPaletteSelection(this.filtered, this.input.getValue()) : kept;
 		this.invalidate();
 	}
 

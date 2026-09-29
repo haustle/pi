@@ -248,6 +248,8 @@ export interface OverlayOptions {
 	visible?: (termWidth: number, termHeight: number) => boolean;
 	/** If true, don't capture keyboard focus when shown */
 	nonCapturing?: boolean;
+	/** Dim the content behind this overlay so it recedes, focusing attention on the overlay. */
+	backdrop?: boolean;
 }
 
 /** Options for {@link OverlayHandle.unfocus}. */
@@ -384,6 +386,38 @@ export class Container implements Component {
 const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
 
 /** Composite overlay content into a terminal line at a fixed column. */
+const FAINT_ATTRIBUTE = "\x1b[2m";
+/** SGR sequences that clear the faint attribute: full reset (`0`/empty) and bold-off (`22`). */
+const CLEARS_FAINT_REGEX = /\x1b\[(?:0|22)?m/g;
+
+/**
+ * Dim a rendered line for use as a modal backdrop by forcing the faint attribute on.
+ * Foreground/background color changes leave faint intact, so we only need to re-apply
+ * it after sequences that reset it. Image lines can't carry SGR, so they pass through.
+ */
+export function dimBackdropLine(line: string): string {
+	if (line.length === 0 || isImageLine(line)) return line;
+	return FAINT_ATTRIBUTE + line.replace(CLEARS_FAINT_REGEX, (match) => match + FAINT_ATTRIBUTE);
+}
+
+/**
+ * Rows a rendered image line occupies, from its Kitty `r=` param. Terminal-drawn
+ * images span this many grid rows downward from their header line; other protocols
+ * default to a single row.
+ */
+export function imageLineRowSpan(line: string): number {
+	const match = /\x1b_G([^;]*);/.exec(line);
+	if (!match) return 1;
+	for (const param of match[1].split(",")) {
+		const [key, value] = param.split("=", 2);
+		if (key === "r") {
+			const rows = Number(value);
+			if (Number.isInteger(rows) && rows > 0) return rows;
+		}
+	}
+	return 1;
+}
+
 export function compositeTuiLine(
 	baseLine: string,
 	overlayLine: string,
@@ -1332,6 +1366,36 @@ export abstract class TuiBase extends Container implements TUI {
 		}
 
 		const viewportStart = Math.max(0, workingHeight - termHeight);
+
+		// Kitty/iTerm images are painted by the terminal on top of the text grid, so an
+		// overlay composited as text cannot cover them. Blank any image whose rows fall
+		// under an overlay: dropping the sequence here makes the differential renderer
+		// delete the placement, so the image no longer floats in front of the modal.
+		const overlayRows = new Set<number>();
+		for (const { row, overlayLines } of rendered) {
+			for (let i = 0; i < overlayLines.length; i++) overlayRows.add(viewportStart + row + i);
+		}
+		if (overlayRows.size > 0) {
+			for (let idx = 0; idx < result.length; idx++) {
+				if (!isImageLine(result[idx])) continue;
+				const span = imageLineRowSpan(result[idx]);
+				for (let scanRow = idx; scanRow < idx + span; scanRow++) {
+					if (overlayRows.has(scanRow)) {
+						result[idx] = "";
+						break;
+					}
+				}
+			}
+		}
+
+		// Backdrop: dim the visible content behind the overlay so it recedes. Applied to
+		// every viewport row before compositing, so the margins beside a narrow overlay dim
+		// too; the overlay's own bright content overwrites the covered columns afterward.
+		if (rendered.some(({ entry }) => entry.options?.backdrop)) {
+			for (let idx = viewportStart; idx < result.length; idx++) {
+				result[idx] = dimBackdropLine(result[idx]);
+			}
+		}
 
 		// Composite each overlay
 		for (const { overlayLines, row, col, w } of rendered) {

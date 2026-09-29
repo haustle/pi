@@ -163,7 +163,7 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(persistedAssistant.usage.cost.total).toBe(0.123);
 	});
 
-	it("settles the active response before session replacement", async () => {
+	it("keeps a busy outgoing session running in the background on session replacement", async () => {
 		let toolStarted!: () => void;
 		const toolStartedPromise = new Promise<void>((resolve) => {
 			toolStarted = resolve;
@@ -195,12 +195,17 @@ describe("AgentSessionRuntime characterization", () => {
 		await toolStartedPromise;
 
 		const switchResult = await runtime.switchSession(firstSessionFile);
-		await promptPromise;
 
 		expect(switchResult.cancelled).toBe(false);
 		expect(runtime.session.sessionFile).toBe(firstSessionFile);
-		// The outgoing session settled before replacement: the interrupted tool
-		// call has a persisted tool result instead of dangling forever.
+		// The outgoing turn keeps running in the background instead of being cut off.
+		expect(runtime.backgroundSessions).toEqual([outgoingSession]);
+		expect(outgoingSession.isIdle).toBe(false);
+
+		// Stopping it settles the turn: the interrupted tool call gets a persisted
+		// tool result instead of dangling forever.
+		await outgoingSession.abort();
+		await promptPromise;
 		const outgoingEntries = SessionManager.open(outgoingSession.sessionFile!)
 			.getEntries()
 			.filter((entry) => entry.type === "message");

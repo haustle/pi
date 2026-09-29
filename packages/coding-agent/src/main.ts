@@ -59,6 +59,7 @@ import {
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { collectSettingsDiagnostics, deduplicateDiagnostics } from "./core/settings-diagnostics.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import { readOtherPresence, ThreadInUseError } from "./core/thread-presence.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
@@ -842,6 +843,13 @@ export async function main(args: string[], options?: MainOptions) {
 		};
 	};
 	time("createRuntime");
+	// Two processes appending to one session file would interleave their entries.
+	const initialSessionFile = sessionManager.isPersisted() ? sessionManager.getSessionFile() : undefined;
+	const initialHolder = initialSessionFile ? readOtherPresence(initialSessionFile) : undefined;
+	if (initialSessionFile && initialHolder) {
+		console.error(chalk.red(`Error: ${new ThreadInUseError(initialSessionFile, initialHolder).message}`));
+		process.exit(1);
+	}
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd: sessionManager.getCwd(),
 		agentDir,
