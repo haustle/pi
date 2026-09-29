@@ -35,7 +35,8 @@ describe("status indicators", () => {
 		const indicator = new WorkingStatusIndicator(tui, "Working");
 		editor.setWorkingStatusIndicator(indicator);
 
-		expect(stripAnsi(editor.render(20)[0]!)).toBe("─".repeat(20));
+		// The editor draws its border as the top of a rounded frame inset one column from each edge.
+		expect(stripAnsi(editor.render(20)[0]!)).toBe(` ╭${"─".repeat(16)}╮ `);
 		const standaloneLine = indicator.render(20)[1]!;
 		expect(standaloneLine).toContain(theme.getFgAnsi("accent"));
 		expect(standaloneLine).toContain(theme.getFgAnsi("muted"));
@@ -57,9 +58,10 @@ describe("status indicators", () => {
 		editor.setWorkingStatusIndicator(indicator);
 
 		const topBorder = editor.render(20)[0]!;
-		expect(stripAnsi(topBorder)).toBe("── ⠋ Working ───────");
+		expect(stripAnsi(topBorder)).toBe(" ╭─── ⠋ Working ──╮ ");
 		expect(visibleWidth(topBorder)).toBe(20);
-		expect(topBorder.split(theme.getFgAnsi("thinkingHigh"))).toHaveLength(5);
+		// Border runs, the status, and both frame corners all take the thinking border color.
+		expect(topBorder.split(theme.getFgAnsi("thinkingHigh"))).toHaveLength(7);
 		indicator.dispose();
 	});
 
@@ -89,7 +91,7 @@ describe("status indicators", () => {
 			vi.advanceTimersByTime(1000);
 			expect(stripAnsi(editor.render(120)[0]!)).toContain("Retrying (1/3) in 2s");
 			editor.setWorkingStatusIndicator(undefined);
-			expect(stripAnsi(editor.render(120)[0]!)).toBe("─".repeat(120));
+			expect(stripAnsi(editor.render(120)[0]!)).toBe(` ╭${"─".repeat(116)}╮ `);
 		} finally {
 			for (const indicator of indicators) indicator.dispose();
 		}

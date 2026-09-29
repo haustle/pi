@@ -3281,6 +3281,15 @@ export class AgentSession {
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
 
+	/**
+	 * Swap the UI context extensions see without emitting `session_start` again. Used when a
+	 * thread moves between the foreground and the background of an interactive session.
+	 */
+	setExtensionUIContext(uiContext: ExtensionUIContext): void {
+		this._extensionUIContext = uiContext;
+		this._extensionRunner.setUIContext(uiContext, this._extensionMode);
+	}
+
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
 		if (!this._extensionRunner.hasHandlers("resources_discover")) {
 			return;

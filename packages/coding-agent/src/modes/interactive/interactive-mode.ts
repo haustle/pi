@@ -66,7 +66,11 @@ import {
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
-import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import {
+	type AgentSessionRuntime,
+	SessionImportFileNotFoundError,
+	type ThreadStatus,
+} from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import {
 	CACHE_TTL_MS,
@@ -109,6 +113,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
 	type SessionEntry,
+	type SessionInfo,
 	SessionManager,
 	sessionEntryToContextMessages,
 	type UsageEntry,
@@ -117,6 +122,7 @@ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
+import { ThreadInUseError } from "../../core/thread-presence.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -132,7 +138,13 @@ import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
-import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import {
+	checkForNewPiVersion,
+	formatVersionCheckError,
+	getLatestPiRelease,
+	isNewerPackageVersion,
+	type LatestPiRelease,
+} from "../../utils/version-check.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -182,6 +194,7 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { WelcomeComponent } from "./components/welcome.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -202,6 +215,7 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import { ThreadUIContext } from "./thread-ui-context.ts";
 import { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
@@ -295,12 +309,26 @@ function isUsageSessionEntry(item: RenderSessionItem): item is Extract<SessionEn
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN", "ENOTTY"]);
 /** How many recent threads the command palette offers. */
 const PALETTE_THREAD_LIMIT = 25;
-/** Fewer threads inline so commands stay visible in the mixed palette. */
-const PALETTE_THREAD_LIMIT_INLINE = 6;
 const PALETTE_THREADS_TITLE = "Threads";
 
-/** `threads` is the thread switcher bound to app.threads.open; `all` adds commands and toggles. */
+/** `threads` is the thread switcher bound to app.threads.open; `all` is commands, toggles, and live threads. */
 type PaletteMode = "all" | "threads";
+
+/** Palette hint for a thread that is open somewhere. */
+function formatThreadStatus(status: ThreadStatus): string {
+	const activity = (value: "working" | "needs_input" | "idle", idle: string) =>
+		value === "working" ? "Working…" : value === "needs_input" ? "Needs input" : idle;
+	switch (status.kind) {
+		case "current":
+			return status.activity === "idle" ? "Current" : `${activity(status.activity, "")} · current`;
+		case "background":
+			return activity(status.activity, "Working…");
+		case "finished":
+			return "Waiting for user";
+		case "other_window":
+			return status.activity === "idle" ? "Other window" : `${activity(status.activity, "")} · other window`;
+	}
+}
 
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
@@ -467,6 +495,12 @@ export class InteractiveMode {
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private paletteHandle: OverlayHandle | undefined;
+	/** Rebuilds the open palette's entries so thread statuses stay live. */
+	private paletteRefresh: (() => void) | undefined;
+	/** Extension UI per live thread, so a background thread's UI survives a round trip. */
+	private readonly threadUIs = new Map<AgentSession, ThreadUIContext>();
+	/** Until when a second exit key quits despite threads still working in the background. */
+	private quitConfirmUntil = 0;
 	/** Component currently rendering each message, used to scroll the transcript to an entry. */
 	private messageComponents = new Map<AgentMessage, Component>();
 	private fullscreenLayoutRoot: Component | undefined;
@@ -490,6 +524,8 @@ export class InteractiveMode {
 	private isInitialized = false;
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
+	/** Latest prompt per thread, so a thread's turns run in order without blocking other threads. */
+	private readonly threadPrompts = new Map<AgentSession, Promise<void>>();
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
@@ -592,6 +628,8 @@ export class InteractiveMode {
 
 	// Built-in header (logo + keybinding hints + changelog)
 	private builtInHeader: Component | undefined = undefined;
+	/** Newer upstream release found by the startup or palette check, shown on the welcome and in the palette. */
+	private availableRelease: LatestPiRelease | undefined = undefined;
 
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
@@ -624,12 +662,32 @@ export class InteractiveMode {
 		this.options = { ...options, tuiMode };
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
+			this.dropThreadUI(this.session);
 			this.resetExtensionUI();
 		});
-		this.runtimeHost.setRebindSession(async () => {
-			await this.rebindCurrentSession({ renderBeforeBind: true });
-			this.themeController.applyFromSettings();
+		this.runtimeHost.setBeforeSessionPark((session) => {
+			// The session keeps running; only this screen lets go of it.
+			this.threadUIs.get(session)?.detach();
+			this.unsubscribe?.();
+			this.unsubscribe = undefined;
+			this.clearStatusIndicator();
+			// Escape was pointed at this thread's retry or compaction; hand it back to the editor.
+			if (this.retryEscapeHandler) {
+				this.defaultEditor.onEscape = this.retryEscapeHandler;
+				this.retryEscapeHandler = undefined;
+			}
+			if (this.autoCompactionEscapeHandler) {
+				this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
+				this.autoCompactionEscapeHandler = undefined;
+			}
+			this.resetExtensionUI();
 		});
+		this.runtimeHost.setOnBackgroundRetired((session) => this.dropThreadUI(session));
+		this.runtimeHost.setRebindSession(async (_session, { restored }) => {
+			await this.rebindCurrentSession({ renderBeforeBind: true, restored });
+			await this.themeController.applyFromSettings();
+		});
+		this.runtimeHost.onThreadsChanged(() => this.handleThreadsChanged());
 		this.version = VERSION;
 		this.renderer = createInteractiveTui({
 			tuiMode,
@@ -1089,8 +1147,15 @@ export class InteractiveMode {
 			this.headerContainer.addChild(this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
 		} else {
-			// Minimal header when silenced
-			this.builtInHeader = new Text("", 0, 0);
+			// Silenced startup shows a centered welcome until the transcript has content.
+			this.builtInHeader = new WelcomeComponent({
+				appName: APP_NAME,
+				version: this.version,
+				getHeight: () => this.transcriptScrollView?.viewportHeight ?? 0,
+				getAvailableVersion: () => this.availableRelease?.version,
+				isVisible: () =>
+					this.chatContainer.children.length === 0 && this.loadedResourcesContainer.children.length === 0,
+			});
 			this.headerContainer.addChild(this.builtInHeader);
 		}
 		this.ui.requestRender();
@@ -1168,11 +1233,10 @@ export class InteractiveMode {
 				.finally(() => clearTimeout(timeout));
 		}
 
-		// Start version check asynchronously
+		// Record a newer upstream release quietly; the fork updates through `pi-fork sync`, so a
+		// banner pointing at `pi update` would be wrong and would push the welcome off screen.
 		checkForNewPiVersion(this.version).then((newRelease) => {
-			if (newRelease) {
-				this.showNewVersionNotification(newRelease);
-			}
+			if (newRelease) this.setAvailableRelease(newRelease);
 		});
 
 		// Start package update check asynchronously
@@ -1261,15 +1325,12 @@ export class InteractiveMode {
 			}
 		}
 
-		// Main interactive loop
+		// Main interactive loop. Turns are chained per thread rather than awaited here: a
+		// thread keeps running after the user moves to another one, and waiting on it would
+		// hold the new thread's input until the background turn finished.
 		while (true) {
 			const userInput = await this.getUserInput();
-			try {
-				await this.session.prompt(userInput);
-			} catch (error: unknown) {
-				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-				this.showError(errorMessage);
-			}
+			this.promptInThread(this.session, userInput);
 		}
 	}
 
@@ -1925,7 +1986,12 @@ export class InteractiveMode {
 		}
 
 		if (showDiagnostics) {
-			const skillDiagnostics = skillsResult.diagnostics;
+			// A name collision resolves the same way every time (the higher-precedence copy wins),
+			// so quiet startup leaves it to the full listing and only surfaces real problems.
+			const reportable = (diagnostics: readonly ResourceDiagnostic[]) =>
+				showListing ? [...diagnostics] : diagnostics.filter((diagnostic) => diagnostic.type !== "collision");
+
+			const skillDiagnostics = reportable(skillsResult.diagnostics);
 			if (skillDiagnostics.length > 0) {
 				const warningLines = () => this.formatDiagnostics(skillDiagnostics, sourceInfos);
 				this.loadedResourcesContainer.addChild(
@@ -1934,7 +2000,7 @@ export class InteractiveMode {
 				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
-			const promptDiagnostics = promptsResult.diagnostics;
+			const promptDiagnostics = reportable(promptsResult.diagnostics);
 			if (promptDiagnostics.length > 0) {
 				const warningLines = () => this.formatDiagnostics(promptDiagnostics, sourceInfos);
 				this.loadedResourcesContainer.addChild(
@@ -1959,15 +2025,16 @@ export class InteractiveMode {
 			const shortcutDiagnostics = this.session.extensionRunner.getShortcutDiagnostics();
 			extensionDiagnostics.push(...shortcutDiagnostics);
 
-			if (extensionDiagnostics.length > 0) {
-				const warningLines = () => this.formatDiagnostics(extensionDiagnostics, sourceInfos);
+			const reportedExtensionDiagnostics = reportable(extensionDiagnostics);
+			if (reportedExtensionDiagnostics.length > 0) {
+				const warningLines = this.formatDiagnostics(reportedExtensionDiagnostics, sourceInfos);
 				this.loadedResourcesContainer.addChild(
 					new ThemedText(() => `${theme.fg("warning", "[Extension issues]")}\n${warningLines()}`, 0, 0),
 				);
 				this.loadedResourcesContainer.addChild(new Spacer(1));
 			}
 
-			const themeDiagnostics = themesResult.diagnostics;
+			const themeDiagnostics = reportable(themesResult.diagnostics);
 			if (themeDiagnostics.length > 0) {
 				const warningLines = () => this.formatDiagnostics(themeDiagnostics, sourceInfos);
 				this.loadedResourcesContainer.addChild(
@@ -1982,7 +2049,7 @@ export class InteractiveMode {
 	 * Initialize the extension system with TUI-based UI context.
 	 */
 	private async bindCurrentSessionExtensions(): Promise<void> {
-		const uiContext = this.createExtensionUIContext();
+		const uiContext = this.threadUIFor(this.session).context;
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
@@ -2058,6 +2125,98 @@ export class InteractiveMode {
 		this.showStartupNoticesIfNeeded();
 	}
 
+	/** Put a thread restored from the background back on screen without re-running `session_start`. */
+	private reattachCurrentSessionExtensions(): void {
+		this.threadUIs.get(this.session)?.attach();
+		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
+		this.setupAutocompleteProvider();
+		this.setupExtensionShortcuts(this.session.extensionRunner);
+	}
+
+	private threadUIFor(session: AgentSession): ThreadUIContext {
+		let threadUI = this.threadUIs.get(session);
+		if (!threadUI) {
+			threadUI = new ThreadUIContext(this.createExtensionUIContext(), (hasPending) =>
+				this.runtimeHost.setNeedsInput(session, hasPending),
+			);
+			this.threadUIs.set(session, threadUI);
+		}
+		return threadUI;
+	}
+
+	private dropThreadUI(session: AgentSession): void {
+		this.threadUIs.get(session)?.dispose();
+		this.threadUIs.delete(session);
+	}
+
+	/**
+	 * Redraw the parts of a running turn that are not in the session file yet: the partial
+	 * assistant reply, tools already executing, and the working indicator.
+	 */
+	private restoreLiveTurn(): void {
+		const streaming = this.session.state.streamingMessage;
+		if (streaming?.role === "assistant") {
+			this.streamingComponent = new AssistantMessageComponent(
+				undefined,
+				this.hideThinkingBlock,
+				this.getMarkdownThemeWithSettings(),
+				this.hiddenThinkingLabel,
+				this.outputPad,
+				this.getMarkdownTransformers(),
+			);
+			this.streamingMessage = streaming;
+			this.chatContainer.addChild(this.streamingComponent);
+			this.streamingComponent.updateContent(streaming, true);
+		}
+		for (const toolCallId of this.session.state.pendingToolCalls) {
+			this.pendingTools.get(toolCallId)?.markExecutionStarted();
+		}
+		if (!this.session.isIdle && this.workingVisible) this.showWorkingStatusIndicator();
+		this.updatePendingMessagesDisplay();
+		this.ui.requestRender();
+	}
+
+	private handleThreadsChanged(): void {
+		this.updateBackgroundThreadsLabel();
+		this.paletteRefresh?.();
+	}
+
+	/** Note background work on the editor's bottom border, pointing at the thread switcher. */
+	private updateBackgroundThreadsLabel(): void {
+		let working = 0;
+		let needsInput = 0;
+		for (const session of this.runtimeHost.backgroundSessions) {
+			const status = session.sessionFile ? this.runtimeHost.getThreadStatus(session.sessionFile) : undefined;
+			if (status?.kind !== "background") continue;
+			if (status.activity === "needs_input") needsInput++;
+			else working++;
+		}
+		const parts: string[] = [];
+		if (needsInput > 0)
+			parts.push(`${needsInput} thread${needsInput === 1 ? "" : "s"} need${needsInput === 1 ? "s" : ""} input`);
+		if (working > 0) parts.push(`${working} thread${working === 1 ? "" : "s"} working`);
+		const label = parts.length > 0 ? `${parts.join(", ")} · ${keyText("app.threads.open")}` : undefined;
+		for (const editor of new Set([this.defaultEditor, this.editor])) {
+			(editor as { setBottomLabel?: (label: string | undefined) => void }).setBottomLabel?.(label);
+		}
+		this.ui.requestRender();
+	}
+
+	/**
+	 * Exit keys stop background threads along with the process, so the first press only warns.
+	 * Returns true when exiting should go ahead.
+	 */
+	private confirmQuitWithBackgroundThreads(): boolean {
+		const count = this.runtimeHost.backgroundSessions.length;
+		if (count === 0 || Date.now() < this.quitConfirmUntil) return true;
+		this.quitConfirmUntil = Date.now() + 3000;
+		const threads = count === 1 ? "1 thread is" : `${count} threads are`;
+		this.showWarning(
+			`${threads} still working in the background. Exit again to stop ${count === 1 ? "it" : "them"} and quit.`,
+		);
+		return false;
+	}
+
 	private applyFullscreenScrollbarSetting(): void {
 		this.transcriptScrollView?.setScrollbar(this.settingsManager.getFullscreenScrollbar());
 	}
@@ -2100,7 +2259,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
+	private async rebindCurrentSession(options: { renderBeforeBind?: boolean; restored?: boolean } = {}): Promise<void> {
 		const session = this.session;
 
 		this.unsubscribe?.();
@@ -2110,10 +2269,12 @@ export class InteractiveMode {
 
 		if (options.renderBeforeBind) {
 			this.renderCurrentSessionState();
+			if (options.restored) this.restoreLiveTurn();
 			this.subscribeToAgent();
 		}
 
-		await this.bindCurrentSessionExtensions();
+		if (options.restored) this.reattachCurrentSessionExtensions();
+		else await this.bindCurrentSessionExtensions();
 
 		if (this.session !== session) {
 			return;
@@ -2952,6 +3113,7 @@ export class InteractiveMode {
 		}
 
 		this.editorContainer.addChild(this.editor as Component);
+		this.updateBackgroundThreadsLabel();
 		if (this.activeStatusIndicator) {
 			this.statusContainer.clear();
 			this.activeWorkingIndicatorEmbedded = this.setEditorWorkingStatusIndicator(this.activeStatusIndicator);
@@ -4319,6 +4481,25 @@ export class InteractiveMode {
 		);
 	}
 
+	/** Run a prompt after any earlier prompt submitted to the same thread. */
+	private promptInThread(session: AgentSession, text: string): void {
+		const previous = this.threadPrompts.get(session) ?? Promise.resolve();
+		const next = previous.then(async () => {
+			try {
+				await session.prompt(text);
+			} catch (error: unknown) {
+				// An error in a background thread has nowhere to show; the thread's own
+				// transcript records failed turns.
+				if (this.session !== session) return;
+				this.showError(error instanceof Error ? error.message : "Unknown error occurred");
+			}
+		});
+		this.threadPrompts.set(session, next);
+		void next.then(() => {
+			if (this.threadPrompts.get(session) === next) this.threadPrompts.delete(session);
+		});
+	}
+
 	async getUserInput(): Promise<string> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
@@ -4345,7 +4526,7 @@ export class InteractiveMode {
 	private handleCtrlC(): void {
 		const now = Date.now();
 		if (now - this.lastSigintTime < 500) {
-			void this.shutdown();
+			if (this.confirmQuitWithBackgroundThreads()) void this.shutdown();
 		} else {
 			this.clearEditor();
 			this.lastSigintTime = now;
@@ -4354,7 +4535,7 @@ export class InteractiveMode {
 
 	private handleCtrlD(): void {
 		// Only called when editor is empty (enforced by CustomEditor)
-		void this.shutdown();
+		if (this.confirmQuitWithBackgroundThreads()) void this.shutdown();
 	}
 
 	/**
@@ -5782,9 +5963,22 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Entries for the command palette. `threads` keeps only the thread switcher for `app.threads.open`.
+	 * Entries for the command palette. `threads` shows only the thread switcher for `app.threads.open`;
+	 * `all` prioritizes pi-specific commands and omits threads entirely.
 	 */
-	private async buildPaletteEntries({ mode }: { mode: PaletteMode }): Promise<PaletteEntry[]> {
+	/** One palette row per thread, with its live status in place of the date while it has one. */
+	private threadPaletteEntry(session: SessionInfo, status: ThreadStatus | undefined): PaletteEntry {
+		return {
+			category: "thread",
+			key: session.path,
+			label: session.name ?? session.firstMessage,
+			keywords: session.cwd,
+			hint: { type: "text", text: status ? formatThreadStatus(status) : formatSessionDate(session.modified) },
+			run: () => void this.handleResumeSession(session.path),
+		};
+	}
+
+	private paletteEntriesFor({ mode, sessions }: { mode: PaletteMode; sessions: SessionInfo[] }): PaletteEntry[] {
 		const entries: PaletteEntry[] = [];
 
 		if (mode === "threads") {
@@ -5795,27 +5989,25 @@ export class InteractiveMode {
 				labelFromQuery: (query) => (query.trim() ? `New thread: ${query}` : "New thread"),
 				run: (query) => this.handleNewThreadFromPalette(query),
 			});
+
+			for (const session of sessions.slice(0, PALETTE_THREAD_LIMIT)) {
+				entries.push(this.threadPaletteEntry(session, this.runtimeHost.getThreadStatus(session.path)));
+			}
+
+			return entries;
 		}
 
-		const sessions = await SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir());
-		const threadLimit = mode === "threads" ? PALETTE_THREAD_LIMIT : PALETTE_THREAD_LIMIT_INLINE;
-		for (const session of sessions.slice(0, threadLimit)) {
-			entries.push({
-				category: "thread",
-				label: session.name ?? session.firstMessage,
-				keywords: session.cwd,
-				hint: { type: "text", text: formatSessionDate(session.modified) },
-				run: () => void this.handleResumeSession(session.path),
-			});
+		// Threads with live work lead the command palette too, so they are one keystroke away.
+		for (const session of sessions) {
+			const status = this.runtimeHost.getThreadStatus(session.path);
+			if (status && status.kind !== "current") entries.push(this.threadPaletteEntry(session, status));
 		}
-
-		if (mode === "threads") return entries;
 
 		for (const command of BUILTIN_SLASH_COMMANDS) {
 			entries.push({
 				category: "command",
-				label: `/${command.name}`,
-				keywords: command.description,
+				label: command.name,
+				keywords: `/${command.name} ${command.description ?? ""}`,
 				run: () => void this.defaultEditor.onSubmit?.(`/${command.name}`),
 			});
 		}
@@ -5823,8 +6015,8 @@ export class InteractiveMode {
 		for (const command of this.session.extensionRunner.getCommands()) {
 			entries.push({
 				category: command.source,
-				label: `/${command.name}`,
-				keywords: command.description,
+				label: command.name,
+				keywords: `/${command.name} ${command.description ?? ""}`,
 				run: () => void this.defaultEditor.onSubmit?.(`/${command.name}`),
 			});
 		}
@@ -5854,9 +6046,47 @@ export class InteractiveMode {
 				hint: { type: "key", keybinding: "app.editor.external" },
 				run: () => void this.handleOpenExternalEditor(),
 			},
+			{
+				category: "command",
+				label: "Check for updates",
+				keywords: "update upgrade version release pi-fork sync",
+				...(this.availableRelease
+					? { hint: { type: "text" as const, text: `v${this.availableRelease.version} available` } }
+					: {}),
+				run: () => void this.handleCheckForUpdates(),
+			},
 		);
 
 		return entries;
+	}
+
+	private setAvailableRelease(release: LatestPiRelease): void {
+		this.availableRelease = release;
+		this.ui.requestRender();
+	}
+
+	/** Palette action: ask upstream for the latest release and report it in the transcript. */
+	private async handleCheckForUpdates(): Promise<void> {
+		this.showStatus("Checking for updates…");
+		let release: LatestPiRelease | undefined;
+		try {
+			release = await getLatestPiRelease(this.version, { retry: true });
+		} catch (error: unknown) {
+			this.showWarning(`Update check failed: ${formatVersionCheckError(error)}`);
+			return;
+		}
+		if (!release) {
+			this.showWarning("Update check failed: no release information from pi.dev");
+			return;
+		}
+		if (!isNewerPackageVersion(release.version, this.version)) {
+			this.showStatus(`Up to date (v${this.version})`);
+			return;
+		}
+		this.setAvailableRelease(release);
+		this.showStatus(
+			`v${release.version} is available upstream (running v${this.version}). Run pi-fork sync to rebase.`,
+		);
 	}
 
 	/**
@@ -5870,30 +6100,51 @@ export class InteractiveMode {
 
 	/** Command palette overlay: threads, commands, and editor toggles in one fuzzy list. */
 	private async openCommandPalette({ mode }: { mode: PaletteMode }): Promise<void> {
-		const entries = await this.buildPaletteEntries({ mode });
+		const sessions = await SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir());
+		const entries = this.paletteEntriesFor({ mode, sessions });
 		if (entries.length === 0) return;
 
 		// Key repeat can fire this again before the session list resolves, so replace the old overlay.
 		this.paletteHandle?.hide();
-		const handle = this.ui.showOverlay(
-			new CommandPalette({
-				entries,
-				maxVisible: paletteMaxVisible(this.ui.terminal.rows),
-				title: mode === "threads" ? PALETTE_THREADS_TITLE : undefined,
-				onAccept: (entry, query) => {
-					// Close first: the entry may open another dialog, which owns the editor dock.
-					this.paletteHandle = undefined;
-					handle.hide();
-					void entry.run(query);
-				},
-				onCancel: () => {
-					this.paletteHandle = undefined;
-					handle.hide();
-				},
-			}),
-			{ anchor: "center", width: "80%", minWidth: 50, maxHeight: "90%", margin: 1 },
-		);
+		this.paletteRefresh = undefined;
+		const close = () => {
+			this.paletteHandle = undefined;
+			this.paletteRefresh = undefined;
+			handle.hide();
+		};
+		const palette = new CommandPalette({
+			entries,
+			maxVisible: paletteMaxVisible(this.ui.terminal.rows),
+			title: mode === "threads" ? PALETTE_THREADS_TITLE : undefined,
+			onAccept: (entry, query) => {
+				// Keep the draft while a palette action opens a selector. Those actions route through
+				// the editor submit handler, which normally clears the editor after showing the selector.
+				const draft = this.defaultEditor.getText();
+				close();
+				void (async () => {
+					await entry.run(query);
+					if (entry.category !== "thread") {
+						this.defaultEditor.setText(draft);
+						this.ui.requestRender();
+					}
+				})();
+			},
+			onCancel: close,
+		});
+		const handle = this.ui.showOverlay(palette, {
+			anchor: "center",
+			width: "50%",
+			minWidth: 50,
+			maxHeight: "90%",
+			margin: 1,
+			backdrop: true,
+		});
 		this.paletteHandle = handle;
+		// Statuses come from memory and presence files, so the thread list itself is reused.
+		this.paletteRefresh = () => {
+			palette.setEntries(this.paletteEntriesFor({ mode, sessions }));
+			this.ui.requestRender();
+		};
 		this.ui.requestRender();
 	}
 
@@ -5945,6 +6196,8 @@ export class InteractiveMode {
 		options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
 	): Promise<{ cancelled: boolean }> {
 		this.clearStatusIndicator();
+		// A thread coming back from the background is mid-turn; a status line would land inside it.
+		const fromBackground = this.runtimeHost.getThreadStatus(sessionPath)?.kind === "background";
 		try {
 			const result = await this.runtimeHost.switchSession(sessionPath, {
 				withSession: options?.withSession,
@@ -5953,9 +6206,13 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return result;
 			}
-			this.showStatus("Resumed session");
+			if (!fromBackground) this.showStatus("Resumed session");
 			return result;
 		} catch (error: unknown) {
+			if (error instanceof ThreadInUseError) {
+				this.showWarning(error.message);
+				return { cancelled: true };
+			}
 			if (error instanceof MissingSessionCwdError) {
 				const selectedCwd = await this.promptForMissingSessionCwd(error);
 				if (!selectedCwd) {
@@ -7122,8 +7379,11 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return;
 			}
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(new ThemedText(() => theme.fg("accent", "✓ New session started"), 1, 1));
+			// The welcome already marks a fresh session, and any transcript content would hide it.
+			if (!(this.builtInHeader instanceof WelcomeComponent)) {
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(new ThemedText(() => theme.fg("accent", "✓ New session started"), 1, 1));
+			}
 			this.ui.requestRender();
 		} catch (error: unknown) {
 			await this.handleFatalRuntimeError("Failed to create session", error);

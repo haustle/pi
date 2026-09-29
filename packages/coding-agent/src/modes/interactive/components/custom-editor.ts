@@ -1,6 +1,22 @@
-import { Editor, type EditorOptions, type EditorTheme, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	Editor,
+	type EditorOptions,
+	type EditorTheme,
+	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
+import { theme } from "../theme/theme.ts";
 import type { StatusIndicator } from "./status-indicator.ts";
+
+/** Blank columns between the terminal edge and the editor frame. */
+const FRAME_MARGIN = 1;
+/** Columns from the component edge to the text: the margin, the side border, and one space. */
+const FRAME_INSET = FRAME_MARGIN + 2;
+/** Narrower than this, the frame would crowd the text, so the plain top/bottom rules are kept. */
+const MIN_FRAMED_WIDTH = FRAME_INSET * 2 + 8;
 
 export type CustomEditorOptions = EditorOptions & {
 	/** Render working, compaction, summarization, and retry status in the editor's top border. */
@@ -14,6 +30,7 @@ export class CustomEditor extends Editor {
 	private keybindings: KeybindingsManager;
 	private workingStatusIndicator: StatusIndicator | undefined;
 	public readonly embedWorkingStatus: boolean;
+	private bottomLabel: string | undefined;
 	public actionHandlers: Map<AppKeybinding, () => void> = new Map();
 
 	// Special handlers that can be dynamically replaced
@@ -29,8 +46,50 @@ export class CustomEditor extends Editor {
 		this.embedWorkingStatus = options?.embedWorkingStatus ?? false;
 	}
 
+	/** Text shown at the right end of the bottom border, such as background thread activity. */
+	setBottomLabel(label: string | undefined): void {
+		this.bottomLabel = label;
+	}
+
+	protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
+		const label = this.bottomLabel ? ` ${this.bottomLabel} ` : "";
+		const labelWidth = visibleWidth(label);
+		// Scroll indicators take priority; the label only shows when it fits with room to spare.
+		if (!label || hiddenLineCount > 0 || labelWidth + 4 > width) {
+			return super.renderBottomBorder(width, hiddenLineCount);
+		}
+		return this.borderColor("─".repeat(width - labelWidth - 1)) + theme.fg("muted", label) + this.borderColor("─");
+	}
+
 	setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {
 		this.workingStatusIndicator = indicator;
+	}
+
+	/**
+	 * Draw the editor as a rounded box inset from the terminal edge. The base editor renders
+	 * its top rule, text rows, bottom rule, then any autocomplete rows; this wraps the rules in
+	 * corners, the text rows in side borders, and indents the autocomplete rows to match.
+	 */
+	override render(width: number): string[] {
+		if (width < MIN_FRAMED_WIDTH) return super.render(width);
+
+		const inner = width - FRAME_INSET * 2;
+		const lines = super.render(inner);
+		const bottomIndex = this.renderedVisibleLineCount + 1;
+		const margin = " ".repeat(FRAME_MARGIN);
+		const side = this.borderColor("│");
+		return lines.map((line, index) => {
+			if (index === 0) return `${margin}${this.borderColor("╭─")}${line}${this.borderColor("─╮")}${margin}`;
+			if (index < bottomIndex) return `${margin}${side} ${line} ${side}${margin}`;
+			if (index === bottomIndex)
+				return `${margin}${this.borderColor("╰─")}${line}${this.borderColor("─╯")}${margin}`;
+			return `${margin}  ${line}  ${margin}`;
+		});
+	}
+
+	override handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.width < MIN_FRAMED_WIDTH) return super.handleMouse(event);
+		return super.handleMouse({ ...event, x: event.x - FRAME_INSET, width: event.width - FRAME_INSET * 2 });
 	}
 
 	protected override renderTopBorder(width: number, hiddenLineCount: number): string {

@@ -1280,4 +1280,35 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).toContain("[Skill conflicts]");
 		expect(output).not.toContain("[Skills]");
 	});
+
+	test("keeps name collisions out of quiet startup, since the higher-precedence skill wins", () => {
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: true,
+			skills: [{ filePath: "/tmp/project/.agents/skills/deslop/SKILL.md", name: "deslop" }],
+			skillDiagnostics: [{ type: "collision", message: 'name "deslop" collision' }],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+			showDiagnosticsWhenQuiet: true,
+		});
+
+		expect(fakeThis.loadedResourcesContainer.children).toHaveLength(0);
+	});
+
+	test("lists name collisions when startup is verbose", () => {
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: true,
+			verbose: true,
+			skills: [{ filePath: "/tmp/project/.agents/skills/deslop/SKILL.md", name: "deslop" }],
+			skillDiagnostics: [{ type: "collision", message: 'name "deslop" collision' }],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+			showDiagnosticsWhenQuiet: true,
+		});
+
+		expect(renderAll(fakeThis.loadedResourcesContainer)).toContain("[Skill conflicts]");
+	});
 });
