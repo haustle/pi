@@ -12,7 +12,9 @@ import {
 } from "typescript/unstable/ast/is";
 import { API } from "typescript/unstable/sync";
 
-const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules"]);
+// `pi-image-tools` is a verbatim vendored extension: upstream uses `.js` relative specifiers,
+// and the fork-local copy is kept close to upstream so upgrades stay mechanical (see VENDORED.md).
+const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules", "pi-image-tools"]);
 const files = [];
 
 function collectTypescriptFiles(directory) {

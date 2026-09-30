@@ -23,6 +23,9 @@ const allowedExternalPackages = new Set([
 	"@earendil-works/chord/node",
 	"@silvia-odwyer/photon-node",
 	"jiti",
+	// Optional native accelerator for the built-in pi-image-tools extension. Its
+	// caller falls back to the platform clipboard commands when absent.
+	"@mariozechner/clipboard",
 	// Optional native accelerators. Their callers fall back to JavaScript when absent.
 	"bufferutil",
 	"utf-8-validate",
