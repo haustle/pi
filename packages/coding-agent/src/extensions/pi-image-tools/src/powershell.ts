@@ -1,0 +1,248 @@
+import { spawn, spawnSync } from "node:child_process";
+
+import { getErrorMessage, isErrnoException } from "./errors.js";
+
+export interface PowerShellCommandResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  missingCommand: boolean;
+  reason?: string;
+}
+
+export interface BufferedCommandResult {
+  status: number | null;
+  stdout: Buffer;
+  stderr: Buffer;
+  error?: Error;
+}
+
+export interface RunBufferedCommandOptions {
+  maxBuffer: number;
+  timeout: number;
+  windowsHide?: boolean;
+}
+
+export interface RunPowerShellCommandOptions {
+  args?: string[];
+  encoded?: boolean;
+  maxBuffer: number;
+  sta?: boolean;
+  timeout: number;
+}
+
+const ALLOWED_BUFFERED_COMMANDS = new Set(["img2sixel", "powershell", "powershell.exe"]);
+
+function encodePowerShell(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
+export function runBufferedCommand(
+  command: string,
+  args: readonly string[],
+  options: RunBufferedCommandOptions,
+): Promise<BufferedCommandResult> {
+  return new Promise((resolve) => {
+    const normalizedCommand = command.trim().toLowerCase();
+    if (!ALLOWED_BUFFERED_COMMANDS.has(normalizedCommand)) {
+      resolve({
+        status: null,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from(`Command is not allowlisted for pi-image-tools buffered execution: ${command}`),
+        error: new Error(`Command is not allowlisted for pi-image-tools buffered execution: ${command}`),
+      });
+      return;
+    }
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, [...args], { // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- command is checked against ALLOWED_BUFFERED_COMMANDS immediately above; args are fixed by Sixel/Image preview code and shell is disabled.
+        windowsHide: options.windowsHide,
+      });
+    } catch (error) {
+      resolve({
+        status: null,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return;
+    }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let processError: Error | undefined;
+
+    const finish = (result: BufferedCommandResult): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+
+    const failAndKill = (error: Error): void => {
+      processError = error;
+      child.kill();
+    };
+
+    const appendChunk = (chunks: Buffer[], chunk: unknown, currentBytes: number): number => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const nextBytes = currentBytes + buffer.length;
+      if (nextBytes > options.maxBuffer && !processError) {
+        failAndKill(new Error(`Command output exceeded maxBuffer (${options.maxBuffer} bytes).`));
+        return nextBytes;
+      }
+
+      chunks.push(buffer);
+      return nextBytes;
+    };
+
+    const timeout = setTimeout(() => {
+      failAndKill(new Error(`Command timed out after ${options.timeout}ms.`));
+    }, options.timeout);
+    timeout.unref?.();
+
+    child.stdout?.on("data", (chunk: unknown) => {
+      stdoutBytes = appendChunk(stdoutChunks, chunk, stdoutBytes);
+    });
+
+    child.stderr?.on("data", (chunk: unknown) => {
+      stderrBytes = appendChunk(stderrChunks, chunk, stderrBytes);
+    });
+
+    child.on("error", (error: Error) => {
+      processError = error;
+      finish({
+        status: null,
+        stdout: Buffer.concat(stdoutChunks),
+        stderr: Buffer.concat(stderrChunks),
+        error: processError,
+      });
+    });
+
+    child.on("close", (status: number | null) => {
+      finish({
+        status,
+        stdout: Buffer.concat(stdoutChunks),
+        stderr: Buffer.concat(stderrChunks),
+        error: processError,
+      });
+    });
+  });
+}
+
+const POWERSHELL_NON_WINDOWS_REASON = "PowerShell is only available through pi-image-tools on Windows.";
+
+function nonWindowsPowerShellResult(): PowerShellCommandResult {
+  return {
+    ok: false,
+    stdout: "",
+    stderr: "",
+    missingCommand: false,
+    reason: POWERSHELL_NON_WINDOWS_REASON,
+  };
+}
+
+function buildPowerShellCommandArgs(
+  script: string,
+  options: RunPowerShellCommandOptions,
+): string[] {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    ...(options.sta ? ["-STA"] : []),
+    ...(options.encoded ? ["-EncodedCommand", encodePowerShell(script)] : ["-Command", script]),
+    ...(options.args ?? []),
+  ];
+}
+
+function buildPowerShellResultFromError(
+  error: Error,
+  stdout: string,
+  stderr: string,
+): PowerShellCommandResult {
+  return {
+    ok: false,
+    stdout,
+    stderr,
+    missingCommand: isErrnoException(error) && error.code === "ENOENT",
+    reason: getErrorMessage(error),
+  };
+}
+
+function buildPowerShellResultFromStatus(
+  status: number | null,
+  stdout: string,
+  stderr: string,
+): PowerShellCommandResult {
+  return {
+    ok: status === 0,
+    stdout,
+    stderr,
+    missingCommand: false,
+    reason: status === 0 ? undefined : `PowerShell exited with code ${status}`,
+  };
+}
+
+export function runPowerShellCommand(
+  script: string,
+  options: RunPowerShellCommandOptions,
+): PowerShellCommandResult {
+  if (process.platform !== "win32") {
+    return nonWindowsPowerShellResult();
+  }
+
+  const commandArgs = buildPowerShellCommandArgs(script, options);
+
+  const result = spawnSync("powershell.exe", commandArgs, {
+    encoding: "utf8",
+    timeout: options.timeout,
+    maxBuffer: options.maxBuffer,
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    return buildPowerShellResultFromError(
+      result.error,
+      result.stdout ?? "",
+      result.stderr ?? "",
+    );
+  }
+
+  return buildPowerShellResultFromStatus(
+    result.status,
+    result.stdout ?? "",
+    result.stderr ?? "",
+  );
+}
+
+export async function runPowerShellCommandAsync(
+  script: string,
+  options: RunPowerShellCommandOptions,
+): Promise<PowerShellCommandResult> {
+  if (process.platform !== "win32") {
+    return nonWindowsPowerShellResult();
+  }
+
+  const commandArgs = buildPowerShellCommandArgs(script, options);
+
+  const result = await runBufferedCommand("powershell.exe", commandArgs, {
+    timeout: options.timeout,
+    maxBuffer: options.maxBuffer,
+    windowsHide: true,
+  });
+  const stdout = result.stdout.toString("utf8");
+  const stderr = result.stderr.toString("utf8");
+
+  if (result.error) {
+    return buildPowerShellResultFromError(result.error, stdout, stderr);
+  }
+
+  return buildPowerShellResultFromStatus(result.status, stdout, stderr);
+}
