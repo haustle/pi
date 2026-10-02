@@ -12,15 +12,13 @@
  */
 
 import { type Component, isViewportTUI, Key, Markdown, matchesKey, type TUI } from "@earendil-works/pi-tui";
-import {
-	CustomEditor,
-	copyToClipboard,
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	getMarkdownTheme,
-	rawKeyHint,
-	type Theme,
-} from "../../index.ts";
+// Concrete modules, not ../../index.ts: the barrel re-enters this file through
+// extensions/index.ts, and a class-extends would then read an uninitialised binding.
+import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
+import { CustomEditor } from "../../modes/interactive/components/custom-editor.ts";
+import { rawKeyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { copyToClipboard } from "../../utils/clipboard.ts";
 import { collectFocusableMessages, type FocusableMessage, frameBottom, frameRow, frameTop } from "./frame.ts";
 
 const COMMAND_NAME = "focus";
