@@ -21,7 +21,7 @@ import { findGitPaths } from "./footer-data-provider.ts";
 import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
-import { SettingsManager } from "./settings-manager.ts";
+import { type PackageSource, SettingsManager } from "./settings-manager.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import { createSourceInfo, type SourceInfo } from "./source-info.ts";
@@ -165,6 +165,8 @@ export interface DefaultResourceLoaderOptions {
 	additionalSkillPaths?: string[];
 	additionalPromptTemplatePaths?: string[];
 	additionalThemePaths?: string[];
+	/** Packages resolved for every session regardless of `settings.json`. See `PackageManagerOptions`. */
+	defaultPackages?: PackageSource[];
 	extensionFactories?: InlineExtension[];
 	noExtensions?: boolean;
 	noSkills?: boolean;
@@ -260,6 +262,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			cwd: this.cwd,
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
+			defaultPackages: options.defaultPackages,
 		});
 		this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
 		this.additionalSkillPaths = options.additionalSkillPaths ?? [];

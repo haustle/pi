@@ -131,6 +131,12 @@ interface PackageManagerOptions {
 	cwd: string;
 	agentDir: string;
 	settingsManager: SettingsManager;
+	/**
+	 * Packages resolved for every session, whether or not `settings.json` lists
+	 * them. Missing ones install on first start. A `settings.json` entry for the
+	 * same package wins, since dedupe is first-wins.
+	 */
+	defaultPackages?: PackageSource[];
 }
 
 type SourceScope = "user" | "project" | "temporary";
@@ -810,11 +816,13 @@ export class DefaultPackageManager implements PackageManager {
 	private globalNpmRoot: string | undefined;
 	private globalNpmRootCommandKey: string | undefined;
 	private progressCallback: ProgressCallback | undefined;
+	private defaultPackages: PackageSource[];
 
 	constructor(options: PackageManagerOptions) {
 		this.cwd = resolvePath(options.cwd);
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager;
+		this.defaultPackages = options.defaultPackages ?? [];
 	}
 
 	setProgressCallback(callback: ProgressCallback | undefined): void {
@@ -920,6 +928,11 @@ export class DefaultPackageManager implements PackageManager {
 			allPackages.push({ pkg, scope: "project" });
 		}
 		for (const pkg of globalSettings.packages ?? []) {
+			allPackages.push({ pkg, scope: "user" });
+		}
+		// Defaults go last: dedupe is first-wins, so anything configured above keeps
+		// its own version, and a missing package installs on first start.
+		for (const pkg of this.defaultPackages) {
 			allPackages.push({ pkg, scope: "user" });
 		}
 
