@@ -30,6 +30,8 @@ export interface ScrollLayoutState {
 	readonly overscroll: "chain" | "contain";
 	readonly viewportHeight: number;
 	getContentWidth(width: number): number;
+	/** Set the viewport height before the child renders, so viewport-sized children see the current value. */
+	setViewportHeight(viewportHeight: number): void;
 	updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void;
 }
 
