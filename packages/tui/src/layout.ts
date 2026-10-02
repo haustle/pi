@@ -136,6 +136,10 @@ function layoutComponent(
 	if (node.type === "scroll") {
 		const previousScrollTop = node.state.scrollTop;
 		const contentWidth = node.state.getContentWidth(safeWidth);
+		// The viewport is known before the child renders (only unconstrained measurement needs the
+		// content height), so publish it first: children that size to the viewport would otherwise
+		// keep the previous frame's height and drift off-center until something else re-rendered.
+		if (height !== undefined) node.state.setViewportHeight(height);
 		const childBox = layoutComponent(
 			context,
 			node.component,

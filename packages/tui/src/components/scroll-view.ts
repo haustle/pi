@@ -186,6 +186,10 @@ export class ScrollView extends Container {
 		}
 	}
 
+	setViewportHeight(viewportHeight: number): void {
+		this.currentViewportHeight = Math.max(0, Math.floor(viewportHeight));
+	}
+
 	updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
 		this.contentHeight = Math.max(0, Math.floor(contentHeight));
 		this.currentViewportHeight = Math.max(0, Math.floor(viewportHeight));

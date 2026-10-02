@@ -6,6 +6,7 @@ import { Text } from "../src/components/text.ts";
 import { VStack } from "../src/components/v-stack.ts";
 import { renderLayoutFrame } from "../src/layout.ts";
 import { encodeKitty, registerKittyImageMetadata } from "../src/terminal-image.ts";
+import type { Component } from "../src/tui.ts";
 import { stripTerminalSequences } from "../src/utils.ts";
 
 function visibleLines(lines: string[]): string[] {
@@ -46,6 +47,36 @@ describe("viewport layout", () => {
 		]);
 		renderLayoutFrame(root, 10, 3, () => {});
 		assert.strictEqual(renderCount, 1);
+	});
+
+	it("recenters viewport-sized scroll content on the frame the viewport changes", () => {
+		let transcript: ScrollView | undefined;
+		const body: Component = {
+			render: () => {
+				const height = transcript?.viewportHeight ?? 0;
+				const lines = new Array<string>(height).fill("");
+				lines[Math.floor(height / 2)] = "center";
+				return lines;
+			},
+			invalidate: () => {},
+		};
+		transcript = new ScrollView(body, { follow: "end" });
+		let dockLines = 1;
+		const dock: Component = {
+			render: () => Array.from({ length: dockLines }, (_, index) => `dock${index}`),
+			invalidate: () => {},
+		};
+		const root = new VStack([
+			{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+			{ component: dock, basis: "auto", shrink: 1, minSize: 1 },
+		]);
+
+		// Viewport is 9 tall; the centered marker lands on row 4.
+		assert.strictEqual(visibleLines(renderLayoutFrame(root, 20, 10, () => {}).lines).indexOf("center"), 4);
+
+		// The dock grows and the viewport shrinks to 5; the very next frame recenters to row 2.
+		dockLines = 5;
+		assert.strictEqual(visibleLines(renderLayoutFrame(root, 20, 10, () => {}).lines).indexOf("center"), 2);
 	});
 
 	it("paints only clipped rows from very large scroll content", () => {
