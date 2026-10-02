@@ -18,6 +18,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import type { ThemeColor } from "../theme/theme.ts";
 import { theme } from "../theme/theme.ts";
 import { keyText } from "./keybinding-hints.ts";
 
@@ -41,9 +42,15 @@ export interface PaletteEntry {
 	key?: string;
 	/** Extra fuzzy-match text, typically the entry's description. */
 	keywords?: string;
+	/** Overrides the label color, so a row can stand out regardless of selection. */
+	labelColor?: ThemeColor;
 	hint?: PaletteHint;
 	/** Keep this row above the filtered results and always visible. */
 	pinned?: boolean;
+	/** Leave this row out of the initial selection, so the list opens on its first real result. */
+	skipInitialSelection?: boolean;
+	/** Rows sharing a group get one heading above the first of them, when no query is typed. */
+	group?: string;
 	/** Replaces `label` when set, so a row can reflect the query it will act on. */
 	labelFromQuery?: (query: string) => string;
 	run: (query: string) => void | Promise<void>;
@@ -78,14 +85,38 @@ export function filterPaletteEntries(entries: readonly PaletteEntry[], query: st
 	];
 }
 
+/** A rendered palette row: a group heading or a reference to a filtered entry. */
+export type PaletteRow = { kind: "header"; label: string } | { kind: "entry"; index: number };
+
+/**
+ * Rows for the filtered list, with a heading before the first entry of each group. Headings
+ * only appear for an empty query, so a typed query stays a flat ranked list.
+ */
+export function paletteRows(entries: readonly PaletteEntry[], query: string): PaletteRow[] {
+	if (query.trim()) return entries.map((_, index) => ({ kind: "entry" as const, index }));
+	const rows: PaletteRow[] = [];
+	let group: string | undefined;
+	entries.forEach((entry, index) => {
+		if (entry.group && entry.group !== group) {
+			group = entry.group;
+			rows.push({ kind: "header", label: group });
+		}
+		rows.push({ kind: "entry", index });
+	});
+	return rows;
+}
+
 /**
  * Row to select after the list changes. A typed query means the user is looking for an
  * existing entry, so skip the pinned rows unless nothing else matched.
  */
 export function initialPaletteSelection(entries: readonly PaletteEntry[], query: string): number {
-	if (!query.trim()) return 0;
-	const pinned = entries.filter((entry) => entry.pinned).length;
-	return entries.length > pinned ? pinned : 0;
+	if (query.trim()) {
+		const pinned = entries.filter((entry) => entry.pinned).length;
+		return entries.length > pinned ? pinned : 0;
+	}
+	const first = entries.findIndex((entry) => !entry.skipInitialSelection);
+	return first === -1 ? 0 : first;
 }
 
 /** Index window of at most `maxVisible` rows that keeps `selected` in view. */
@@ -104,6 +135,7 @@ export class CommandPalette implements Component, Focusable {
 	private readonly input: Input;
 	private filtered: PaletteEntry[];
 	private selectedIndex: number;
+	private rows: PaletteRow[] = [];
 	private rowStart = 0;
 	private rowEnd = 0;
 	private mousePressedIndex: number | undefined;
@@ -176,8 +208,11 @@ export class CommandPalette implements Component, Focusable {
 		}
 		if (event.button !== "left" || (event.type !== "press" && event.type !== "click")) return undefined;
 
-		const index = this.rowStart + (event.y - ROWS_TOP_LINE);
-		if (index < this.rowStart || index >= this.rowEnd) return undefined;
+		const row = this.rowStart + (event.y - ROWS_TOP_LINE);
+		if (row < this.rowStart || row >= this.rowEnd) return undefined;
+		const target = this.rows[row];
+		if (target?.kind !== "entry") return undefined;
+		const index = target.index;
 
 		if (event.type === "press") {
 			this.mousePressedIndex = index;
@@ -205,16 +240,27 @@ export class CommandPalette implements Component, Focusable {
 			this.renderRow(inner, ""),
 		];
 
-		const { start, end } = paletteWindow(this.filtered.length, this.selectedIndex, this.maxVisible);
+		const rows = paletteRows(this.filtered, query);
+		const selectedRow = rows.findIndex((item) => item.kind === "entry" && item.index === this.selectedIndex);
+		const { start, end } = paletteWindow(rows.length, Math.max(0, selectedRow), this.maxVisible);
+		this.rows = rows;
 		this.rowStart = start;
 		this.rowEnd = end;
 
 		if (this.filtered.length === 0) {
 			lines.push(this.renderRow(inner, theme.fg("muted", "no matches")));
 		}
-		for (let index = start; index < end; index++) {
-			const entry = this.filtered[index];
-			if (entry) lines.push(this.renderEntryRow({ entry, query, inner, selected: index === this.selectedIndex }));
+		for (let row = start; row < end; row++) {
+			const item = rows[row];
+			if (!item) continue;
+			if (item.kind === "header") {
+				lines.push(this.renderHeaderRow(inner, item.label));
+				continue;
+			}
+			const entry = this.filtered[item.index];
+			if (entry) {
+				lines.push(this.renderEntryRow({ entry, query, inner, selected: item.index === this.selectedIndex }));
+			}
 		}
 		if (this.filtered.length > this.maxVisible) {
 			lines.push(this.renderRow(inner, theme.fg("muted", `(${this.selectedIndex + 1}/${this.filtered.length})`)));
@@ -273,6 +319,12 @@ export class CommandPalette implements Component, Focusable {
 
 	private renderBottomBorder(width: number): string {
 		return theme.fg("border", `╰${"─".repeat(Math.max(0, width - 2))}╯`);
+	}
+
+	/** Group heading: a muted label over a dim rule, so buckets read as sections. */
+	private renderHeaderRow(inner: number, label: string): string {
+		const rule = "─".repeat(Math.max(0, inner - visibleWidth(label) - 1));
+		return this.renderRow(inner, `${theme.fg("muted", theme.bold(label))} ${theme.fg("border", rule)}`);
 	}
 
 	/** One row inside the box, padded to `inner`. `selected` fills the row background. */

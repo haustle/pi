@@ -5,6 +5,7 @@ import {
 	type PaletteCategory,
 	type PaletteEntry,
 	paletteMaxVisible,
+	paletteRows,
 	paletteWindow,
 } from "../../src/modes/interactive/components/command-palette.ts";
 
@@ -58,6 +59,14 @@ describe("initialPaletteSelection", () => {
 		expect(initialPaletteSelection([createThread, ...entries], "")).toBe(0);
 	});
 
+	it("skips rows marked skipInitialSelection when the query is empty", () => {
+		expect(initialPaletteSelection([{ ...createThread, skipInitialSelection: true }, ...entries], "")).toBe(1);
+	});
+
+	it("falls back to a skipped row when it is the only one", () => {
+		expect(initialPaletteSelection([{ ...createThread, skipInitialSelection: true }], "")).toBe(0);
+	});
+
 	it("skips pinned rows when a query matched something else", () => {
 		expect(initialPaletteSelection([createThread, entry("/model")], "model")).toBe(1);
 	});
@@ -90,5 +99,37 @@ describe("paletteMaxVisible", () => {
 
 	it("stays usable on short terminals", () => {
 		expect(paletteMaxVisible(12)).toBe(5);
+	});
+});
+
+describe("paletteRows", () => {
+	it("leaves ungrouped entries as a flat list", () => {
+		expect(paletteRows(entries, "")).toEqual(entries.map((_, index) => ({ kind: "entry", index })));
+	});
+
+	it("puts one heading above the first row of each group", () => {
+		const grouped = [
+			createThread,
+			{ ...entry("fix the widget", "thread"), group: "Today" },
+			{ ...entry("ship the thing", "thread"), group: "Today" },
+			{ ...entry("older thread", "thread"), group: "Older" },
+		];
+
+		expect(paletteRows(grouped, "")).toEqual([
+			{ kind: "entry", index: 0 },
+			{ kind: "header", label: "Today" },
+			{ kind: "entry", index: 1 },
+			{ kind: "entry", index: 2 },
+			{ kind: "header", label: "Older" },
+			{ kind: "entry", index: 3 },
+		]);
+	});
+
+	it("drops headings while a query is typed", () => {
+		const grouped = [{ ...entry("fix the widget", "thread"), group: "Today" }, entry("/model")];
+		expect(paletteRows(grouped, "widget")).toEqual([
+			{ kind: "entry", index: 0 },
+			{ kind: "entry", index: 1 },
+		]);
 	});
 });
