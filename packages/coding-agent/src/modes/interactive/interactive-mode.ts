@@ -683,6 +683,7 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
+		this.updateEditorFrameLabels();
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -1123,6 +1124,7 @@ export class InteractiveMode {
 
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {
+			this.updateEditorFrameLabels();
 			this.ui.requestRender();
 		});
 
@@ -2117,6 +2119,17 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/** Show the project folder and git branch in the top border of the input frame. */
+	private updateEditorFrameLabels(): void {
+		const labels = {
+			left: this.footerDataProvider.getProjectName(),
+			right: this.footerDataProvider.getGitBranch() ?? undefined,
+		};
+		for (const editor of new Set([this.defaultEditor, this.editor])) {
+			(editor as { setFrameLabels?: (labels: { left?: string; right?: string }) => void }).setFrameLabels?.(labels);
+		}
+	}
+
 	private handleThreadsChanged(): void {
 		this.updateBackgroundThreadsLabel();
 		this.paletteRefresh?.();
@@ -3007,6 +3020,7 @@ export class InteractiveMode {
 
 		this.editorContainer.addChild(this.editor as Component);
 		this.updateBackgroundThreadsLabel();
+		this.updateEditorFrameLabels();
 		if (this.activeStatusIndicator) {
 			this.statusContainer.clear();
 			this.activeWorkingIndicatorEmbedded = this.setEditorWorkingStatusIndicator(this.activeStatusIndicator);

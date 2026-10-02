@@ -5,6 +5,7 @@ import {
 	type TUI,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
+	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
@@ -17,6 +18,8 @@ const FRAME_MARGIN = 1;
 const FRAME_INSET = FRAME_MARGIN + 2;
 /** Narrower than this, the frame would crowd the text, so the plain top/bottom rules are kept. */
 const MIN_FRAMED_WIDTH = FRAME_INSET * 2 + 8;
+/** Dashes the top rule keeps for itself when it carries frame labels. */
+const MIN_FRAME_RULE_DASHES = 4;
 
 export type CustomEditorOptions = EditorOptions & {
 	/** Render working, compaction, summarization, and retry status in the editor's top border. */
@@ -30,7 +33,13 @@ export class CustomEditor extends Editor {
 	private keybindings: KeybindingsManager;
 	private workingStatusIndicator: StatusIndicator | undefined;
 	public readonly embedWorkingStatus: boolean;
+	/** Text shown at the right end of the bottom border, such as background thread activity. */
 	private bottomLabel: string | undefined;
+	/**
+	 * Text shown inside the top border: the project folder at the left, the git branch at the right.
+	 * Both are shortened to their share of the width; an absent side leaves the rule plain there.
+	 */
+	private frameLabels: { left?: string; right?: string } = {};
 	public actionHandlers: Map<AppKeybinding, () => void> = new Map();
 
 	// Special handlers that can be dynamically replaced
@@ -49,6 +58,10 @@ export class CustomEditor extends Editor {
 	/** Text shown at the right end of the bottom border, such as background thread activity. */
 	setBottomLabel(label: string | undefined): void {
 		this.bottomLabel = label;
+	}
+
+	setFrameLabels(labels: { left?: string; right?: string }): void {
+		this.frameLabels = labels;
 	}
 
 	protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
@@ -93,6 +106,25 @@ export class CustomEditor extends Editor {
 	}
 
 	protected override renderTopBorder(width: number, hiddenLineCount: number): string {
+		const left = this.frameLabels.left;
+		const right = this.frameLabels.right;
+		if (!left && !right) return this.renderTopRule(width, hiddenLineCount);
+
+		const labels = [left, right].filter((label) => label !== undefined).length;
+		const share = Math.max(1, Math.floor((width - MIN_FRAME_RULE_DASHES - 2 * labels) / labels));
+		const leftChunk = left ? this.frameLabelChunk(left, share) : "";
+		const rightChunk = right ? this.frameLabelChunk(right, share) : "";
+		const reserved = visibleWidth(leftChunk) + visibleWidth(rightChunk);
+		return leftChunk + this.renderTopRule(width - reserved, hiddenLineCount) + rightChunk;
+	}
+
+	/** A top-rule label, padded by one space each side and shortened to fit its share. */
+	private frameLabelChunk(label: string, share: number): string {
+		return this.borderColor(` ${truncateToWidth(label, share, "…")} `);
+	}
+
+	/** The editor's own top rule at `width`, untouched by the frame labels. */
+	private renderTopRule(width: number, hiddenLineCount: number): string {
 		if (!this.embedWorkingStatus || !this.workingStatusIndicator || width <= 0) {
 			return super.renderTopBorder(width, hiddenLineCount);
 		}
