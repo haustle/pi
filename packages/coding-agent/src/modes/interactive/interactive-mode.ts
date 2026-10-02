@@ -284,6 +284,18 @@ const PALETTE_THREADS_TITLE = "Threads";
 /** `threads` is the thread switcher bound to app.threads.open; `all` is commands, toggles, and live threads. */
 type PaletteMode = "all" | "threads";
 
+/** Time bucket a thread falls into in the thread switcher, by calendar day rather than hours. */
+export function formatThreadTimeBucket(modified: Date, now = new Date()): string {
+	const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+	// Rounded so a DST shift of an hour does not push a thread into the neighbouring bucket.
+	const days = Math.round((startOfDay(now) - startOfDay(modified)) / 86_400_000);
+	if (days <= 0) return "Today";
+	if (days === 1) return "Yesterday";
+	if (days <= 7) return "Last week";
+	if (days <= 30) return "Last month";
+	return "Older";
+}
+
 /** Palette hint for a thread that is open somewhere. */
 function formatThreadStatus(status: ThreadStatus): string {
 	const activity = (value: "working" | "needs_input" | "idle", idle: string) =>
@@ -5842,12 +5854,15 @@ export class InteractiveMode {
 				category: "thread",
 				label: "New thread",
 				pinned: true,
+				skipInitialSelection: true,
 				labelFromQuery: (query) => (query.trim() ? `New thread: ${query}` : "New thread"),
 				run: (query) => this.handleNewThreadFromPalette(query),
 			});
 
 			for (const session of sessions.slice(0, PALETTE_THREAD_LIMIT)) {
-				entries.push(this.threadPaletteEntry(session, this.runtimeHost.getThreadStatus(session.path)));
+				const entry = this.threadPaletteEntry(session, this.runtimeHost.getThreadStatus(session.path));
+				// Sessions arrive newest first, so each bucket is one contiguous run.
+				entries.push({ ...entry, group: formatThreadTimeBucket(session.modified) });
 			}
 
 			return entries;
@@ -5989,7 +6004,7 @@ export class InteractiveMode {
 		});
 		const handle = this.ui.showOverlay(palette, {
 			anchor: "center",
-			width: "50%",
+			width: "55%",
 			minWidth: 50,
 			maxHeight: "90%",
 			margin: 1,
