@@ -82,15 +82,23 @@ describe("WelcomeComponent", () => {
 	it("fills the transcript height and centers the logo and text", () => {
 		const lines = welcome(30).render(120);
 		expect(lines).toHaveLength(30);
-		expect(lines.some((line) => strip(line).includes("Welcome to pi"))).toBe(true);
+		expect(lines.some((line) => strip(line).includes("Welcome to Pilon"))).toBe(true);
 		expect(lines.some((line) => strip(line).includes("●"))).toBe(true);
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(120);
 	});
 
-	it("drops the logo on narrow terminals", () => {
+	it("stacks the logo above the text on narrow terminals", () => {
 		const lines = welcome(0).render(50).map(strip);
+		expect(lines.some((line) => line.includes("●"))).toBe(true);
+		expect(lines.some((line) => line.includes("Welcome to Pilon"))).toBe(true);
+		const logoEnd = lines.findLastIndex((line) => line.includes("●"));
+		expect(lines.findIndex((line) => line.includes("Welcome to Pilon"))).toBeGreaterThan(logoEnd);
+	});
+
+	it("drops the logo when it cannot fit on a row of its own", () => {
+		const lines = welcome(0).render(20).map(strip);
 		expect(lines.some((line) => line.includes("●"))).toBe(false);
-		expect(lines.some((line) => line.includes("Welcome to pi"))).toBe(true);
+		expect(lines.some((line) => line.includes("Welcome to Pilon"))).toBe(true);
 	});
 
 	it("notes a newer upstream release beside the version", () => {
