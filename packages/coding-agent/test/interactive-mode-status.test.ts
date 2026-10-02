@@ -1264,7 +1264,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect((InteractiveMode as any).prototype.shouldShowStartupDetails.call(verbose)).toBe(true);
 	});
 
-	test("still shows diagnostics on quiet startup when requested", () => {
+	test("holds diagnostics for the modal on quiet startup instead of printing them", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: true,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
@@ -1276,9 +1276,10 @@ describe("InteractiveMode.showLoadedResources", () => {
 			showDiagnosticsWhenQuiet: true,
 		});
 
-		const output = renderAll(fakeThis.loadedResourcesContainer);
-		expect(output).toContain("[Skill conflicts]");
-		expect(output).not.toContain("[Skills]");
+		expect(fakeThis.loadedResourcesContainer.children).toHaveLength(0);
+		expect(fakeThis.resourceIssues).toHaveLength(1);
+		expect(fakeThis.resourceIssues[0].level).toBe("warning");
+		expect(fakeThis.resourceIssues[0].message).toContain("[Skill conflicts]");
 	});
 
 	test("keeps name collisions out of quiet startup, since the higher-precedence skill wins", () => {
@@ -1310,5 +1311,56 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(renderAll(fakeThis.loadedResourcesContainer)).toContain("[Skill conflicts]");
+	});
+});
+
+describe("InteractiveMode startup issues", () => {
+	const strip = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
+	const fakeThis = () =>
+		({
+			options: {},
+			settingsManager: { getQuietStartup: () => true },
+			startupIssues: [],
+			resourceIssues: [],
+			showError: () => {},
+			showWarning: () => {},
+			isQuietStartup: (InteractiveMode as any).prototype.isQuietStartup,
+			reportStartupIssue: (InteractiveMode as any).prototype.reportStartupIssue,
+			allStartupIssues: (InteractiveMode as any).prototype.allStartupIssues,
+			startupIssueLine: (InteractiveMode as any).prototype.startupIssueLine,
+		}) as any;
+
+	test("collects issues on quiet startup and points at the palette", () => {
+		const self = fakeThis();
+		self.reportStartupIssue("warning", "duplicate skill name");
+
+		expect(self.startupIssues).toEqual([{ level: "warning", message: "duplicate skill name" }]);
+		expect(strip(self.startupIssueLine())).toContain("1 startup issue");
+	});
+
+	test("counts resource conflicts and marks the note as an error", () => {
+		const self = fakeThis();
+		self.startupIssues.push({ level: "warning", message: "stale model" });
+		self.resourceIssues.push({ level: "error", message: "[Extension issues]\nbroken" });
+
+		expect(strip(self.startupIssueLine())).toContain("2 startup issues");
+		expect(self.allStartupIssues()).toHaveLength(2);
+	});
+
+	test("shows no note when startup was clean", () => {
+		expect(fakeThis().startupIssueLine()).toBeUndefined();
+	});
+
+	test("prints issues inline when startup is verbose", () => {
+		const self = fakeThis();
+		self.options.verbose = true;
+		const seen: string[] = [];
+		self.showWarning = (message: string) => seen.push(message);
+		self.showError = (message: string) => seen.push(message);
+
+		self.reportStartupIssue("error", "models.json error");
+
+		expect(seen).toEqual(["models.json error"]);
+		expect(self.startupIssues).toEqual([]);
 	});
 });

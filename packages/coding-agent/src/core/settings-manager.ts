@@ -1110,8 +1110,8 @@ export class SettingsManager {
 	}
 
 	getQuietStartup(): QuietStartup {
-		const value = this.settings.quietStartup;
-		return value === true || value === "header" ? value : false;
+		// Fork default: quiet. `quietStartup: false` or `--verbose` restores the banner.
+		return this.settings.quietStartup ?? true;
 	}
 
 	setQuietStartup(quiet: QuietStartup): void {

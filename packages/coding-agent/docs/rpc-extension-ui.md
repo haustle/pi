@@ -112,7 +112,7 @@ The `notifyType` field is `"info"`, `"warning"`, or `"error"`. Defaults to `"inf
 
 ### setStatus
 
-Set or clear a status entry in the footer/status bar. Fire-and-forget.
+Set or clear a status entry. Fire-and-forget. In the terminal UI, statuses appear in the command palette under `Show extension statuses`; the RPC client can display them anywhere.
 
 ```json
 {

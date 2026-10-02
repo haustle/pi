@@ -31,6 +31,14 @@ describe("issue #7829 invalid settings warning", () => {
 				outputPad: 1,
 				ui: { requestRender: vi.fn() },
 				version: "test",
+				// Verbose startup keeps the transcript rendering this test guards.
+				settingsManager: { getQuietStartup: () => false },
+				isQuietStartup: (InteractiveMode.prototype as unknown as { isQuietStartup(): boolean }).isQuietStartup,
+				reportStartupIssue: (
+					InteractiveMode.prototype as unknown as {
+						reportStartupIssue(level: "error" | "warning", message: string): void;
+					}
+				).reportStartupIssue,
 				showWarning: (InteractiveMode.prototype as unknown as { showWarning(message: string): void }).showWarning,
 				session: harness.session,
 				checkForPackageUpdates: vi.fn().mockResolvedValue([]),

@@ -470,6 +470,12 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
 	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
 
+/** A startup problem held back from the transcript and shown in the diagnostics modal. */
+export interface StartupIssue {
+	level: "error" | "warning";
+	message: string;
+}
+
 /**
  * Options for InteractiveMode initialization.
  */
@@ -555,6 +561,12 @@ export class InteractiveMode {
 	private lastEscapeTime = 0;
 	private changelogMarkdown: string | undefined = undefined;
 	private startupNoticesShown = false;
+	/** Startup errors/warnings withheld from the transcript so quiet startup stays clean. */
+	private startupIssues: StartupIssue[] = [];
+	/** Conflicts from the last resource scan; rebuilt on every `showLoadedResources` pass. */
+	private resourceIssues: StartupIssue[] = [];
+	/** Extension updates found at startup, surfaced through the palette instead of a banner. */
+	private packageUpdates: string[] = [];
 	private anthropicSubscriptionWarningShown = false;
 
 	// Status line tracking (for mutating immediately-sequential status updates)
@@ -933,6 +945,11 @@ export class InteractiveMode {
 		}
 		this.startupNoticesShown = true;
 
+		// Quiet startup lands on the new-thread view; /changelog still prints on demand.
+		if (this.isQuietStartup()) {
+			return;
+		}
+
 		if (!this.changelogMarkdown) {
 			return;
 		}
@@ -1154,7 +1171,8 @@ export class InteractiveMode {
 				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
-				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,				this.getStartupExpansionState(),
+				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
+				this.getStartupExpansionState(),
 				1,
 				0,
 			);
@@ -1172,6 +1190,7 @@ export class InteractiveMode {
 				version: this.version,
 				getHeight: () => this.transcriptScrollView?.viewportHeight ?? 0,
 				getAvailableVersion: () => this.availableRelease?.version,
+				getIssueLine: () => this.startupIssueLine(),
 				isVisible: () =>
 					this.chatContainer.children.length === 0 && this.loadedResourcesContainer.children.length === 0,
 			});
@@ -1262,7 +1281,9 @@ export class InteractiveMode {
 		// Start package update check asynchronously
 		this.checkForPackageUpdates()
 			.then((updates) => {
-				if (updates.length > 0) {
+				if (updates.length === 0) return;
+				this.packageUpdates = updates;
+				if (!this.isQuietStartup()) {
 					this.showPackageUpdateNotification(updates);
 				}
 			})
@@ -1276,9 +1297,7 @@ export class InteractiveMode {
 
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
-			if (warning) {
-				this.showWarning(warning);
-			}
+			if (warning) this.reportStartupIssue("warning", warning);
 		});
 
 		// Show startup warnings
@@ -1292,35 +1311,37 @@ export class InteractiveMode {
 		} = this.options;
 
 		for (const diagnostic of startupDiagnostics ?? []) {
-			if (diagnostic.type === "error") {
-				this.showError(diagnostic.message);
-			} else if (diagnostic.type === "warning") {
-				this.showWarning(diagnostic.message);
-			} else {
-				this.showStatus(diagnostic.message);
+			if (diagnostic.type === "info") {
+				if (!this.isQuietStartup()) this.showStatus(diagnostic.message);
+				continue;
 			}
+			this.reportStartupIssue(diagnostic.type, diagnostic.message);
 		}
 
 		if (migratedProviders && migratedProviders.length > 0) {
-			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
+			this.reportStartupIssue("warning", `Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
 		}
 
 		const modelsJsonError = this.session.modelRuntime.getError();
 		if (modelsJsonError) {
-			this.showError(`models.json error: ${modelsJsonError}`);
+			this.reportStartupIssue("error", `models.json error: ${modelsJsonError}`);
 		}
 
 		if (modelFallbackMessage) {
-			this.showWarning(modelFallbackMessage);
+			this.reportStartupIssue("warning", modelFallbackMessage);
 		}
 
 		const crash = takeUnnotifiedCrash();
 		if (crash) {
 			const when = new Date(crash.timestamp).toLocaleString();
-			this.showWarning(
+			this.reportStartupIssue(
+				"warning",
 				`${APP_NAME} crashed on ${when} (${crash.message}). Run /bug to report it; the crash details are attached automatically.`,
 			);
 		}
+
+		// The welcome reads the issue list lazily, so one render is enough to show the note.
+		this.ui.requestRender();
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
@@ -1352,6 +1373,73 @@ export class InteractiveMode {
 			const userInput = await this.getUserInput();
 			this.promptInThread(this.session, userInput);
 		}
+	}
+
+	/** Quiet startup is the fork default: `--verbose` or `quietStartup: false` restores the banner. */
+	private isQuietStartup(): boolean {
+		return !this.options.verbose && this.settingsManager.getQuietStartup() !== false;
+	}
+
+	/** Startup problems print inline when verbose, and wait for the diagnostics modal when quiet. */
+	private reportStartupIssue(level: "error" | "warning", message: string): void {
+		if (!this.isQuietStartup()) {
+			if (level === "error") this.showError(message);
+			else this.showWarning(message);
+			return;
+		}
+		this.startupIssues.push({ level, message });
+	}
+
+	private allStartupIssues(): StartupIssue[] {
+		return [...this.startupIssues, ...this.resourceIssues];
+	}
+
+	/** One-line pointer to the diagnostics modal, shown only when startup had problems. */
+	private startupIssueLine(): string | undefined {
+		const issues = this.allStartupIssues();
+		if (issues.length === 0) return undefined;
+		const color = issues.some((issue) => issue.level === "error") ? "error" : "warning";
+		const label = `${issues.length} startup issue${issues.length === 1 ? "" : "s"}`;
+		return `${theme.fg(color, `⚠ ${label}`)}${theme.fg("muted", ` · ${keyText("app.palette.open")} to review`)}`;
+	}
+
+	/** Read-only modal for the startup diagnostics held back from the transcript. */
+	private async showStartupDiagnostics(): Promise<void> {
+		const issues = this.allStartupIssues();
+		if (issues.length === 0) {
+			this.showStatus("No startup diagnostics.");
+			return;
+		}
+		const description = issues
+			.map((issue) => theme.fg(issue.level === "error" ? "error" : "warning", issue.message))
+			.join("\n\n");
+		await this.showExtensionSelector("Startup diagnostics", ["Close"], undefined, description);
+	}
+
+	/** Read-only modal for the extension updates found at startup. */
+	private async showPackageUpdates(): Promise<void> {
+		if (this.packageUpdates.length === 0) return;
+		const description = `${theme.fg("muted", `Run ${theme.bold(`${APP_NAME} update --extensions`)} to upgrade.`)}
+
+${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
+		await this.showExtensionSelector("Package updates available", ["Close"], undefined, description);
+	}
+
+	/** Status texts extensions set through ctx.ui.setStatus(), in palette order. */
+	private extensionStatusTexts(): string[] {
+		return [...this.footerDataProvider.getExtensionStatuses().entries()]
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([, text]) => text);
+	}
+
+	/** Read-only modal for the statuses extensions set through ctx.ui.setStatus(). */
+	private async showExtensionStatuses(): Promise<void> {
+		const statuses = this.extensionStatusTexts();
+		if (statuses.length === 0) {
+			this.showStatus("No extension statuses.");
+			return;
+		}
+		await this.showExtensionSelector("Extension statuses", ["Close"], undefined, statuses.join("\n"));
 	}
 
 	private async checkForPackageUpdates(): Promise<string[]> {
@@ -2005,29 +2093,29 @@ export class InteractiveMode {
 			}
 		}
 
+		this.resourceIssues = [];
 		if (showDiagnostics) {
 			// A name collision resolves the same way every time (the higher-precedence copy wins),
 			// so quiet startup leaves it to the full listing and only surfaces real problems.
 			const reportable = (diagnostics: readonly ResourceDiagnostic[]) =>
 				showListing ? [...diagnostics] : diagnostics.filter((diagnostic) => diagnostic.type !== "collision");
+			const addDiagnosticSection = (name: string, diagnostics: readonly ResourceDiagnostic[]): void => {
+				if (diagnostics.length === 0) return;
+				const lines = this.formatDiagnostics(diagnostics, sourceInfos);
+				if (showListing) {
+					this.loadedResourcesContainer.addChild(new Text(`${theme.fg("warning", `[${name}]`)}\n${lines}`, 0, 0));
+					this.loadedResourcesContainer.addChild(new Spacer(1));
+					return;
+				}
+				// Quiet startup keeps the transcript clean; the modal shows the same detail.
+				this.resourceIssues.push({
+					level: diagnostics.some((diagnostic) => diagnostic.type === "error") ? "error" : "warning",
+					message: `[${name}]\n${lines}`,
+				});
+			};
 
-			const skillDiagnostics = reportable(skillsResult.diagnostics);
-			if (skillDiagnostics.length > 0) {
-				const warningLines = () => this.formatDiagnostics(skillDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new ThemedText(() => `${theme.fg("warning", "[Skill conflicts]")}\n${warningLines()}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
-
-			const promptDiagnostics = reportable(promptsResult.diagnostics);
-			if (promptDiagnostics.length > 0) {
-				const warningLines = () => this.formatDiagnostics(promptDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new ThemedText(() => `${theme.fg("warning", "[Prompt conflicts]")}\n${warningLines()}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
+			addDiagnosticSection("Skill conflicts", reportable(skillsResult.diagnostics));
+			addDiagnosticSection("Prompt conflicts", reportable(promptsResult.diagnostics));
 
 			const extensionDiagnostics: ResourceDiagnostic[] = [];
 			const extensionsResult = this.session.resourceLoader.getExtensions();
@@ -2037,31 +2125,12 @@ export class InteractiveMode {
 			for (const warning of extensionsResult.warnings ?? []) {
 				extensionDiagnostics.push({ type: "warning", message: warning.warning, path: warning.path });
 			}
-
-			const commandDiagnostics = this.session.extensionRunner.getCommandDiagnostics();
-			extensionDiagnostics.push(...commandDiagnostics);
+			extensionDiagnostics.push(...this.session.extensionRunner.getCommandDiagnostics());
 			extensionDiagnostics.push(...this.getBuiltInCommandConflictDiagnostics(this.session.extensionRunner));
+			extensionDiagnostics.push(...this.session.extensionRunner.getShortcutDiagnostics());
+			addDiagnosticSection("Extension issues", reportable(extensionDiagnostics));
 
-			const shortcutDiagnostics = this.session.extensionRunner.getShortcutDiagnostics();
-			extensionDiagnostics.push(...shortcutDiagnostics);
-
-			const reportedExtensionDiagnostics = reportable(extensionDiagnostics);
-			if (reportedExtensionDiagnostics.length > 0) {
-				const warningLines = this.formatDiagnostics(reportedExtensionDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new ThemedText(() => `${theme.fg("warning", "[Extension issues]")}\n${warningLines()}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
-
-			const themeDiagnostics = reportable(themesResult.diagnostics);
-			if (themeDiagnostics.length > 0) {
-				const warningLines = () => this.formatDiagnostics(themeDiagnostics, sourceInfos);
-				this.loadedResourcesContainer.addChild(
-					new ThemedText(() => `${theme.fg("warning", "[Theme conflicts]")}\n${warningLines()}`, 0, 0),
-				);
-				this.loadedResourcesContainer.addChild(new Spacer(1));
-			}
+			addDiagnosticSection("Theme conflicts", reportable(themesResult.diagnostics));
 		}
 	}
 
@@ -2500,10 +2569,17 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Set extension status text in the footer.
+	 * Set extension status text, shown in the command palette. Control characters are
+	 * collapsed so a status stays one line wherever it is displayed.
 	 */
 	private setExtensionStatus(key: string, text: string | undefined): void {
-		this.footerDataProvider.setExtensionStatus(key, text);
+		this.footerDataProvider.setExtensionStatus(
+			key,
+			text
+				?.replace(/[\r\n\t]/g, " ")
+				.replace(/ +/g, " ")
+				.trim(),
+		);
 		this.ui.requestRender();
 	}
 
@@ -2897,6 +2973,7 @@ export class InteractiveMode {
 		title: string,
 		options: string[],
 		opts?: ExtensionUIDialogOptions,
+		description?: string,
 		blocked: BlockedStatus = { kind: "question", message: title },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
@@ -2924,7 +3001,12 @@ export class InteractiveMode {
 					this.hideExtensionSelector();
 					resolve(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
+				{
+					tui: this.ui,
+					timeout: opts?.timeout,
+					description,
+					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
+				},
 			);
 
 			this.disposeActiveSelector();
@@ -2958,7 +3040,7 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts, {
+		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts, undefined, {
 			kind: "permission",
 			message: title,
 		});
@@ -6054,6 +6136,44 @@ export class InteractiveMode {
 		for (const session of sessions) {
 			const status = this.runtimeHost.getThreadStatus(session.path);
 			if (status && status.kind !== "current") entries.push(this.threadPaletteEntry(session, status));
+		}
+
+		// Startup problems pin to the top, where the welcome note points.
+		const startupIssues = this.allStartupIssues();
+		if (startupIssues.length > 0) {
+			entries.push({
+				category: "command",
+				label: "Review startup diagnostics",
+				keywords: "startup error warning conflict issue diagnostics",
+				pinned: true,
+				hint: { type: "text", text: `${startupIssues.length} issue${startupIssues.length === 1 ? "" : "s"}` },
+				run: () => this.showStartupDiagnostics(),
+			});
+		}
+		if (this.packageUpdates.length > 0) {
+			entries.push({
+				category: "command",
+				label: "Review package updates",
+				keywords: "update upgrade extensions packages",
+				pinned: true,
+				hint: { type: "text", text: `${this.packageUpdates.length} packages` },
+				run: () => this.showPackageUpdates(),
+			});
+		}
+
+		// Statuses are passive, so this row stays unpinned: it is there when looked for.
+		const extensionStatuses = this.extensionStatusTexts();
+		if (extensionStatuses.length > 0) {
+			entries.push({
+				category: "command",
+				label: "Show extension statuses",
+				keywords: "status extension mcp servers ponytail",
+				hint: {
+					type: "text",
+					text: `${extensionStatuses.length} status${extensionStatuses.length === 1 ? "" : "es"}`,
+				},
+				run: () => this.showExtensionStatuses(),
+			});
 		}
 
 		for (const command of BUILTIN_SLASH_COMMANDS) {
