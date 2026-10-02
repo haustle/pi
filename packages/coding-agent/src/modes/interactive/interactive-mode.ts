@@ -169,6 +169,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { formatSessionDate, SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { SnackbarComponent, SNACKBAR_DURATION_MS, type SnackbarKind } from "./components/snackbar.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -482,6 +483,8 @@ export class InteractiveMode {
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
+	private notificationContainer: Container;
+	private snackbarTimeout: ReturnType<typeof setTimeout> | undefined;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
 	private editorComponentFactory: EditorFactory | undefined;
@@ -676,6 +679,7 @@ export class InteractiveMode {
 		this.documentContainer.addChild(this.chatContainer);
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
+		this.notificationContainer = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
@@ -1005,6 +1009,7 @@ export class InteractiveMode {
 			document: this.documentContainer,
 			pendingMessages: this.pendingMessagesContainer,
 			status: this.statusContainer,
+			notification: this.notificationContainer,
 			widgetsAbove: this.widgetContainerAbove,
 			editor: this.editorContainer,
 			widgetsBelow: this.widgetContainerBelow,
@@ -1019,6 +1024,7 @@ export class InteractiveMode {
 			this.documentContainer,
 			this.pendingMessagesContainer,
 			this.statusContainer,
+			this.notificationContainer,
 			this.widgetContainerAbove,
 			this.editorContainer,
 			this.widgetContainerBelow,
@@ -3048,13 +3054,29 @@ export class InteractiveMode {
 	 * Show a notification for extensions.
 	 */
 	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
+		// Errors stay in the transcript. Info and warning are transient so a fresh session keeps its
+		// welcome instead of losing it to a message that scrolls away anyway.
 		if (type === "error") {
 			this.showError(message);
-		} else if (type === "warning") {
-			this.showWarning(message);
-		} else {
-			this.showStatus(message);
+			return;
 		}
+		this.showSnackbar(message, type === "warning" ? "warning" : "info");
+	}
+
+	/** One-line transient message above the editor. Auto-clears so it never joins the transcript. */
+	private showSnackbar(message: string, kind: SnackbarKind): void {
+		if (this.snackbarTimeout !== undefined) {
+			clearTimeout(this.snackbarTimeout);
+		}
+		this.notificationContainer.clear();
+		this.notificationContainer.addChild(new SnackbarComponent(message, kind));
+		this.ui.requestRender();
+		this.snackbarTimeout = setTimeout(() => {
+			this.snackbarTimeout = undefined;
+			this.notificationContainer.clear();
+			this.ui.requestRender();
+		}, SNACKBAR_DURATION_MS);
+		this.snackbarTimeout.unref?.();
 	}
 
 	/** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
@@ -7319,6 +7341,10 @@ export class InteractiveMode {
 			this.ui.terminal.setProgress(false);
 		}
 		this.clearStatusIndicator();
+		if (this.snackbarTimeout !== undefined) {
+			clearTimeout(this.snackbarTimeout);
+			this.snackbarTimeout = undefined;
+		}
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
