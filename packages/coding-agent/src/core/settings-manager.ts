@@ -1019,7 +1019,8 @@ export class SettingsManager {
 	}
 
 	getQuietStartup(): boolean {
-		return this.settings.quietStartup ?? false;
+		// Fork default: the startup banner is noise. `quietStartup: false` or `--verbose` restores it.
+		return this.settings.quietStartup ?? true;
 	}
 
 	setQuietStartup(quiet: boolean): void {

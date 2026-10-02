@@ -45,6 +45,8 @@ export type WelcomeOptions = {
 	getHeight: () => number;
 	/** Newer upstream release, if the startup check found one. */
 	getAvailableVersion: () => string | undefined;
+	/** One-line pointer to startup problems, when any were collected. */
+	getIssueLine?: () => string | undefined;
 	/** Hidden once the transcript has anything else to show. */
 	isVisible: () => boolean;
 };
@@ -77,13 +79,16 @@ export class WelcomeComponent implements Component {
 	private textLines(): string[] {
 		const key = (text: string) => theme.bold(theme.fg("text", text));
 		const muted = (text: string) => theme.fg("muted", text);
-		return [
+		const lines = [
 			theme.bold(theme.fg("accent", `Welcome to ${this.options.appName}`)),
 			"",
 			`${key(keyText("app.palette.open"))}${muted(" for the palette, ")}${key("/")}${muted(" for commands")}`,
 			"",
 			this.versionLine(),
 		];
+		const issueLine = this.options.getIssueLine?.();
+		if (issueLine) lines.push("", issueLine);
+		return lines;
 	}
 
 	/** The running version, plus a quiet note when upstream has a newer release. */
