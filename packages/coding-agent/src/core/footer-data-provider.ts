@@ -1,6 +1,6 @@
 import { type ExecFileException, execFile, spawnSync } from "child_process";
 import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatchFile, watchFile } from "fs";
-import { dirname, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.ts";
 
 export type GitPaths = {
@@ -129,6 +129,11 @@ export class FooterDataProvider {
 			this.cachedBranch = this.resolveGitBranchSync();
 		}
 		return this.cachedBranch;
+	}
+
+	/** Folder name of the repository root, or of cwd outside a repo. Labels the input frame. */
+	getProjectName(): string {
+		return basename(this.gitPaths?.repoDir ?? this.cwd);
 	}
 
 	/** Extension status texts set via ctx.ui.setStatus() */

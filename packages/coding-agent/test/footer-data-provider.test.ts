@@ -127,6 +127,31 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 
+	it("names the repository root from a nested working directory", () => {
+		const repoDir = createPlainRepo(tempDir);
+		const nestedDir = join(repoDir, "src", "nested");
+		mkdirSync(nestedDir, { recursive: true });
+
+		const provider = new FooterDataProvider(nestedDir);
+		try {
+			expect(provider.getProjectName()).toBe("repo");
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("names the working directory itself outside a repository", () => {
+		const looseDir = join(tempDir, "loose");
+		mkdirSync(looseDir, { recursive: true });
+
+		const provider = new FooterDataProvider(looseDir);
+		try {
+			expect(provider.getProjectName()).toBe("loose");
+		} finally {
+			provider.dispose();
+		}
+	});
+
 	it("resolves the branch via git when HEAD is .invalid in a reftable repo", () => {
 		const repoDir = createPlainReftableRepo(tempDir);
 		process.chdir(repoDir);

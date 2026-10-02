@@ -31,6 +31,42 @@ describe("CustomEditor frame", () => {
 
 		expect(strip(editor.render(10)[0]!)).toBe("─".repeat(10));
 	});
+
+	it("shows the project folder and branch in the top rule", () => {
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const editor = new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings);
+		editor.setText("hello");
+		editor.setFrameLabels({ left: "bend-electron", right: "main" });
+
+		const lines = editor.render(40).map(strip);
+		expect(lines[0]).toBe(` ╭─ bend-electron ${"─".repeat(13)} main ─╮ `);
+		for (const line of editor.render(40)) expect(visibleWidth(line)).toBe(40);
+	});
+
+	it("shortens frame labels to their share of the rule", () => {
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const editor = new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings);
+		editor.setText("hello");
+		editor.setFrameLabels({ left: "bend-electron", right: "a".repeat(80) });
+
+		const lines = editor.render(40).map(strip);
+		expect(lines[0]).toBe(` ╭─ bend-electron ${"─".repeat(4)} ${"a".repeat(12)}… ─╮ `);
+		for (const line of editor.render(40)) expect(visibleWidth(line)).toBe(40);
+	});
+
+	it("leaves the rule plain outside a git repository", () => {
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const editor = new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings);
+		editor.setText("hello");
+		editor.setFrameLabels({ left: "bend-electron" });
+
+		const lines = editor.render(40).map(strip);
+		expect(lines[0]).toBe(` ╭─ bend-electron ${"─".repeat(20)}╮ `);
+		for (const line of editor.render(40)) expect(visibleWidth(line)).toBe(40);
+	});
 });
 
 describe("WelcomeComponent", () => {
