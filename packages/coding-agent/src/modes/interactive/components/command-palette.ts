@@ -352,10 +352,11 @@ export class CommandPalette implements Component, Focusable {
 		const used = CATEGORY_WIDTH + COLUMN_GAP + visibleWidth(label) + visibleWidth(hint);
 		const gap = " ".repeat(Math.max(1, inner - used));
 		const categoryStyle = selected ? "muted" : "dim";
+		const labelStyle = entry.labelColor ?? (selected ? "accent" : undefined);
 		const content =
 			theme.fg(categoryStyle, category) +
 			" ".repeat(COLUMN_GAP) +
-			(selected ? theme.fg("accent", label) : label) +
+			(labelStyle ? theme.fg(labelStyle, label) : label) +
 			gap +
 			theme.fg(categoryStyle, hint);
 		return this.renderRow(inner, content, selected);

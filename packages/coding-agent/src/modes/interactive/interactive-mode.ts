@@ -5994,11 +5994,13 @@ export class InteractiveMode {
 	 */
 	/** One palette row per thread, with its live status in place of the date while it has one. */
 	private threadPaletteEntry(session: SessionInfo, status: ThreadStatus | undefined): PaletteEntry {
+		const isWorking = status !== undefined && status.kind !== "finished" && status.activity === "working";
 		return {
 			category: "thread",
 			key: session.path,
 			label: session.name ?? session.firstMessage,
 			keywords: session.cwd,
+			labelColor: isWorking ? "warning" : undefined,
 			hint: { type: "text", text: status ? formatThreadStatus(status) : formatSessionDate(session.modified) },
 			run: () => void this.handleResumeSession(session.path),
 		};
