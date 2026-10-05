@@ -4,6 +4,7 @@ import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import messageFocusExtension from "./message-focus/index.ts";
 import imageToolsExtension from "./pi-image-tools/src/index.ts";
+import threadsExtension from "./threads/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
@@ -15,4 +16,5 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "mcp", factory: mcpExtension, replaceable: true, builtin: true },
 	{ name: "pi-image-tools", factory: imageToolsExtension },
 	{ name: "message-focus", factory: messageFocusExtension },
+	{ name: "threads", factory: threadsExtension },
 ];
