@@ -14,9 +14,9 @@ const RECENT_IMAGE_ENV_VAR = "PI_IMAGE_TOOLS_RECENT_DIRS";
 const RECENT_IMAGE_CACHE_DIR_ENV_VAR = "PI_IMAGE_TOOLS_RECENT_CACHE_DIR";
 
 type ImagePayload = {
-  type: "image";
-  data: string;
-  mimeType: string;
+	type: "image";
+	data: string;
+	mimeType: string;
 };
 
 interface PendingImage extends ImagePayload {}
@@ -37,303 +37,293 @@ const previewRegistrationPromises = new WeakMap<ExtensionAPI, Promise<void>>();
  * key retains a single in-flight promise per module across calls.
  */
 function loadModule<T>(key: string, factory: () => Promise<T>): Promise<T> {
-  const cached = lazyModules.get(key);
-  if (cached !== undefined) {
-    return cached as Promise<T>;
-  }
+	const cached = lazyModules.get(key);
+	if (cached !== undefined) {
+		return cached as Promise<T>;
+	}
 
-  const promise = factory();
-  lazyModules.set(key, promise);
-  return promise;
+	const promise = factory();
+	lazyModules.set(key, promise);
+	return promise;
 }
 
-async function ensureImagePreviewDisplayRegistered(
-  pi: ExtensionAPI,
-  logger: DebugLogger,
-): Promise<ImagePreviewModule> {
-  const module = await loadModule<ImagePreviewModule>("image-preview", () => import("./image-preview.js"));
-  if (!imagePreviewDisplayRegistrations.has(pi)) {
-    imagePreviewDisplayRegistrations.add(pi);
-    module.registerImagePreviewDisplay(pi, { logger });
-  }
-  return module;
+async function ensureImagePreviewDisplayRegistered(pi: ExtensionAPI, logger: DebugLogger): Promise<ImagePreviewModule> {
+	const module = await loadModule<ImagePreviewModule>("image-preview", () => import("./image-preview.js"));
+	if (!imagePreviewDisplayRegistrations.has(pi)) {
+		imagePreviewDisplayRegistrations.add(pi);
+		module.registerImagePreviewDisplay(pi, { logger });
+	}
+	return module;
 }
 
 async function ensurePreviewRegistrations(pi: ExtensionAPI, logger: DebugLogger): Promise<void> {
-  let registrationPromise = previewRegistrationPromises.get(pi);
-  if (registrationPromise === undefined) {
-    registrationPromise = (async () => {
-      await ensureImagePreviewDisplayRegistered(pi, logger);
+	let registrationPromise = previewRegistrationPromises.get(pi);
+	if (registrationPromise === undefined) {
+		registrationPromise = (async () => {
+			await ensureImagePreviewDisplayRegistered(pi, logger);
 
-      if (!inlineUserPreviewRegistrations.has(pi)) {
-        const module = await loadModule<InlineUserPreviewModule>("inline-user-preview", () => import("./inline-user-preview.js"));
-        inlineUserPreviewRegistrations.add(pi);
-        module.registerInlineUserImagePreview(pi, { logger });
-      }
-    })();
-    previewRegistrationPromises.set(pi, registrationPromise);
-  }
+			if (!inlineUserPreviewRegistrations.has(pi)) {
+				const module = await loadModule<InlineUserPreviewModule>(
+					"inline-user-preview",
+					() => import("./inline-user-preview.js"),
+				);
+				inlineUserPreviewRegistrations.add(pi);
+				module.registerInlineUserImagePreview(pi, { logger });
+			}
+		})();
+		previewRegistrationPromises.set(pi, registrationPromise);
+	}
 
-  await registrationPromise;
+	await registrationPromise;
 }
 
 function imageToBase64(image: ClipboardImage): string {
-  assertImageWithinByteLimit(image.bytes.length, "Image attachment");
-  return Buffer.from(image.bytes).toString("base64");
+	assertImageWithinByteLimit(image.bytes.length, "Image attachment");
+	return Buffer.from(image.bytes).toString("base64");
 }
 
 function countOccurrences(text: string, token: string): number {
-  if (token.length === 0) {
-    return 0;
-  }
+	if (token.length === 0) {
+		return 0;
+	}
 
-  let count = 0;
-  let cursor = 0;
-  while (cursor < text.length) {
-    const index = text.indexOf(token, cursor);
-    if (index === -1) {
-      break;
-    }
+	let count = 0;
+	let cursor = 0;
+	while (cursor < text.length) {
+		const index = text.indexOf(token, cursor);
+		if (index === -1) {
+			break;
+		}
 
-    count += 1;
-    cursor = index + token.length;
-  }
+		count += 1;
+		cursor = index + token.length;
+	}
 
-  return count;
+	return count;
 }
 
 function removeAttachmentIndicators(text: string): string {
-  const withoutMarkers = text.split(IMAGE_ATTACHMENT_INDICATOR).join("");
-  return withoutMarkers.replace(/\n{3,}/g, "\n\n").trim();
+	const withoutMarkers = text.split(IMAGE_ATTACHMENT_INDICATOR).join("");
+	return withoutMarkers.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 async function cacheImageForRecentPicker(ctx: PasteContext, image: ClipboardImage): Promise<void> {
-  try {
-    const { persistImageToRecentCache } = await loadModule<RecentImagesModule>("recent-images", () => import("./recent-images.js"));
-    persistImageToRecentCache(image);
-  } catch (error) {
-    if (ctx.hasUI) {
-      ctx.ui.notify(
-        `Image attached, but failed to cache for /paste-image recent: ${getErrorMessage(error)}`,
-        "warning",
-      );
-    }
-  }
+	try {
+		const { persistImageToRecentCache } = await loadModule<RecentImagesModule>(
+			"recent-images",
+			() => import("./recent-images.js"),
+		);
+		persistImageToRecentCache(image);
+	} catch (error) {
+		if (ctx.hasUI) {
+			ctx.ui.notify(
+				`Image attached, but failed to cache for /paste-image recent: ${getErrorMessage(error)}`,
+				"warning",
+			);
+		}
+	}
 }
 
 function queueImageAttachment(
-  ctx: PasteContext,
-  pendingImages: PendingImage[],
-  image: ClipboardImage,
-  successMessage: string,
-  options: { cacheForRecentPicker?: boolean } = {},
+	ctx: PasteContext,
+	pendingImages: PendingImage[],
+	image: ClipboardImage,
+	successMessage: string,
+	options: { cacheForRecentPicker?: boolean } = {},
 ): void {
-  pendingImages.push({
-    type: "image",
-    data: imageToBase64(image),
-    mimeType: image.mimeType,
-  });
+	pendingImages.push({
+		type: "image",
+		data: imageToBase64(image),
+		mimeType: image.mimeType,
+	});
 
-  if (options.cacheForRecentPicker) {
-    void cacheImageForRecentPicker(ctx, image);
-  }
+	if (options.cacheForRecentPicker) {
+		void cacheImageForRecentPicker(ctx, image);
+	}
 
-  if (!ctx.hasUI) {
-    return;
-  }
+	if (!ctx.hasUI) {
+		return;
+	}
 
-  ctx.ui.pasteToEditor(`${IMAGE_ATTACHMENT_INDICATOR} `);
-  ctx.ui.notify(successMessage, "info");
+	ctx.ui.pasteToEditor(`${IMAGE_ATTACHMENT_INDICATOR} `);
+	ctx.ui.notify(successMessage, "info");
 }
 
-function buildRecentImageEmptyStateMessage(
-  searchedDirectories: readonly string[],
-  cacheDirectory: string,
-): string {
-  const searched =
-    searchedDirectories.length > 0
-      ? searchedDirectories.join("; ")
-      : "No directories configured";
+function buildRecentImageEmptyStateMessage(searchedDirectories: readonly string[], cacheDirectory: string): string {
+	const searched = searchedDirectories.length > 0 ? searchedDirectories.join("; ") : "No directories configured";
 
-  return [
-    `No recent images found. Searched: ${searched}`,
-    `Clipboard-pasted images are cached in: ${cacheDirectory}`,
-    `Set ${RECENT_IMAGE_ENV_VAR} to a semicolon-separated list of directories to override defaults.`,
-    `Set ${RECENT_IMAGE_CACHE_DIR_ENV_VAR} to customize the cache directory.`,
-  ].join(" ");
+	return [
+		`No recent images found. Searched: ${searched}`,
+		`Clipboard-pasted images are cached in: ${cacheDirectory}`,
+		`Set ${RECENT_IMAGE_ENV_VAR} to a semicolon-separated list of directories to override defaults.`,
+		`Set ${RECENT_IMAGE_CACHE_DIR_ENV_VAR} to customize the cache directory.`,
+	].join(" ");
 }
 
 async function showRecentSelectionPreview(
-  pi: ExtensionAPI,
-  image: ClipboardImage,
-  cwd: string,
-  logger: DebugLogger,
+	pi: ExtensionAPI,
+	image: ClipboardImage,
+	cwd: string,
+	logger: DebugLogger,
 ): Promise<void> {
-  const { buildPreviewItems } = await ensureImagePreviewDisplayRegistered(pi, logger);
-  const previewItems = await buildPreviewItems(
-    [
-      {
-        type: "image",
-        data: imageToBase64(image),
-        mimeType: image.mimeType,
-      },
-    ],
-    { cwd, logger },
-  );
+	const { buildPreviewItems } = await ensureImagePreviewDisplayRegistered(pi, logger);
+	const previewItems = await buildPreviewItems(
+		[
+			{
+				type: "image",
+				data: imageToBase64(image),
+				mimeType: image.mimeType,
+			},
+		],
+		{ cwd, logger },
+	);
 
-  if (previewItems.length === 0) {
-    return;
-  }
+	if (previewItems.length === 0) {
+		return;
+	}
 
-  const previewMessage = {
-    customType: IMAGE_PREVIEW_CUSTOM_TYPE,
-    content: "",
-    display: true,
-    details: { items: previewItems },
-  };
+	const previewMessage = {
+		customType: IMAGE_PREVIEW_CUSTOM_TYPE,
+		content: "",
+		display: true,
+		details: { items: previewItems },
+	};
 
-  setTimeout(() => {
-    pi.sendMessage(previewMessage, { triggerTurn: false });
-  }, 0);
+	setTimeout(() => {
+		pi.sendMessage(previewMessage, { triggerTurn: false });
+	}, 0);
 }
 
 export default function imageToolsExtension(pi: ExtensionAPI): void {
-  const config = loadImageToolsConfig();
-  if (!config.enabled) {
-    return;
-  }
-  const logger = DebugLogger.create(config);
-  const pendingImages: PendingImage[] = [];
+	const config = loadImageToolsConfig();
+	if (!config.enabled) {
+		return;
+	}
+	const logger = DebugLogger.create(config);
+	const pendingImages: PendingImage[] = [];
 
-  logger.log("extension.initialize", {
-    debug: config.debug,
-    pasteImageShortcutsConfigured: config.shortcuts.pasteImage !== undefined,
-  });
+	logger.log("extension.initialize", {
+		debug: config.debug,
+		pasteImageShortcutsConfigured: config.shortcuts.pasteImage !== undefined,
+	});
 
-  pi.on("session_start", async (_event, ctx) => {
-    try {
-      const { setActiveTerminalImageSettingsCwd } = await import("./terminal-image-width.js");
-      setActiveTerminalImageSettingsCwd(ctx.cwd);
-      await ensurePreviewRegistrations(pi, logger);
-    } catch (error) {
-      logger.log("preview.lazy_registration_failed", { error: getErrorMessage(error) });
-    }
-  });
+	pi.on("session_start", async (_event, ctx) => {
+		try {
+			const { setActiveTerminalImageSettingsCwd } = await import("./terminal-image-width.js");
+			setActiveTerminalImageSettingsCwd(ctx.cwd);
+			await ensurePreviewRegistrations(pi, logger);
+		} catch (error) {
+			logger.log("preview.lazy_registration_failed", { error: getErrorMessage(error) });
+		}
+	});
 
-  const pasteImageFromClipboard = async (ctx: PasteContext): Promise<void> => {
-    if (!ctx.hasUI) {
-      return;
-    }
+	const pasteImageFromClipboard = async (ctx: PasteContext): Promise<void> => {
+		if (!ctx.hasUI) {
+			return;
+		}
 
-    try {
-      const { readClipboardImage } = await loadModule<ClipboardModule>("clipboard", () => import("./clipboard.js"));
-      const image = await readClipboardImage();
-      if (!image) {
-        ctx.ui.notify("No image found in clipboard.", "warning");
-        return;
-      }
+		try {
+			const { readClipboardImage } = await loadModule<ClipboardModule>("clipboard", () => import("./clipboard.js"));
+			const image = await readClipboardImage();
+			if (!image) {
+				ctx.ui.notify("No image found in clipboard.", "warning");
+				return;
+			}
 
-      queueImageAttachment(
-        ctx,
-        pendingImages,
-        image,
-        "Image attached from clipboard. Add your message, then send. A terminal preview will render after submit.",
-        { cacheForRecentPicker: true },
-      );
-    } catch (error) {
-      ctx.ui.notify(`Image paste failed: ${getErrorMessage(error)}`, "warning");
-    }
-  };
+			queueImageAttachment(
+				ctx,
+				pendingImages,
+				image,
+				"Image attached from clipboard. Add your message, then send. A terminal preview will render after submit.",
+				{ cacheForRecentPicker: true },
+			);
+		} catch (error) {
+			ctx.ui.notify(`Image paste failed: ${getErrorMessage(error)}`, "warning");
+		}
+	};
 
-  const pasteImageFromRecent = async (ctx: PasteContext): Promise<void> => {
-    if (!ctx.hasUI) {
-      ctx.ui.notify("/paste-image recent requires interactive TUI mode.", "warning");
-      return;
-    }
+	const pasteImageFromRecent = async (ctx: PasteContext): Promise<void> => {
+		if (!ctx.hasUI) {
+			ctx.ui.notify("/paste-image recent requires interactive TUI mode.", "warning");
+			return;
+		}
 
-    try {
-      const {
-        discoverRecentImages,
-        formatRecentImageLabel,
-        getRecentImageCacheDirectory,
-        loadRecentImage,
-      } = await loadModule<RecentImagesModule>("recent-images", () => import("./recent-images.js"));
-      const discovery = discoverRecentImages();
-      if (discovery.candidates.length === 0) {
-        ctx.ui.notify(
-          buildRecentImageEmptyStateMessage(
-            discovery.searchedDirectories,
-            getRecentImageCacheDirectory(),
-          ),
-          "warning",
-        );
-        return;
-      }
+		try {
+			const { discoverRecentImages, formatRecentImageLabel, getRecentImageCacheDirectory, loadRecentImage } =
+				await loadModule<RecentImagesModule>("recent-images", () => import("./recent-images.js"));
+			const discovery = discoverRecentImages();
+			if (discovery.candidates.length === 0) {
+				ctx.ui.notify(
+					buildRecentImageEmptyStateMessage(discovery.searchedDirectories, getRecentImageCacheDirectory()),
+					"warning",
+				);
+				return;
+			}
 
-      const options = discovery.candidates.map((candidate, index) => {
-        const rank = String(index + 1).padStart(2, "0");
-        return `${rank}. ${formatRecentImageLabel(candidate)}`;
-      });
+			const options = discovery.candidates.map((candidate, index) => {
+				const rank = String(index + 1).padStart(2, "0");
+				return `${rank}. ${formatRecentImageLabel(candidate)}`;
+			});
 
-      const selectedOption = await ctx.ui.select("Select a recent image", options);
-      if (!selectedOption) {
-        return;
-      }
+			const selectedOption = await ctx.ui.select("Select a recent image", options);
+			if (!selectedOption) {
+				return;
+			}
 
-      const selectedIndex = options.indexOf(selectedOption);
-      if (selectedIndex === -1) {
-        ctx.ui.notify("Selected image no longer exists in the recent list. Please retry.", "warning");
-        return;
-      }
+			const selectedIndex = options.indexOf(selectedOption);
+			if (selectedIndex === -1) {
+				ctx.ui.notify("Selected image no longer exists in the recent list. Please retry.", "warning");
+				return;
+			}
 
-      const selectedCandidate = discovery.candidates[selectedIndex];
-      const selectedImage = loadRecentImage(selectedCandidate);
+			const selectedCandidate = discovery.candidates[selectedIndex];
+			const selectedImage = loadRecentImage(selectedCandidate);
 
-      void showRecentSelectionPreview(pi, selectedImage, ctx.cwd, logger).catch((error: unknown) => {
-        ctx.ui.notify(`Could not render recent image preview: ${getErrorMessage(error)}`, "warning");
-      });
+			void showRecentSelectionPreview(pi, selectedImage, ctx.cwd, logger).catch((error: unknown) => {
+				ctx.ui.notify(`Could not render recent image preview: ${getErrorMessage(error)}`, "warning");
+			});
 
-      queueImageAttachment(
-        ctx,
-        pendingImages,
-        selectedImage,
-        `Recent image attached: ${selectedCandidate.name}. Add your message, then send. A terminal preview will render after submit.`,
-      );
-    } catch (error) {
-      ctx.ui.notify(`Recent image picker failed: ${getErrorMessage(error)}`, "warning");
-    }
-  };
+			queueImageAttachment(
+				ctx,
+				pendingImages,
+				selectedImage,
+				`Recent image attached: ${selectedCandidate.name}. Add your message, then send. A terminal preview will render after submit.`,
+			);
+		} catch (error) {
+			ctx.ui.notify(`Recent image picker failed: ${getErrorMessage(error)}`, "warning");
+		}
+	};
 
-  pi.on("input", async (event) => {
-    if (event.source === "extension") {
-      return { action: "continue" as const };
-    }
+	pi.on("input", async (event) => {
+		if (event.source === "extension") {
+			return { action: "continue" as const };
+		}
 
-    if (pendingImages.length === 0) {
-      return { action: "continue" as const };
-    }
+		if (pendingImages.length === 0) {
+			return { action: "continue" as const };
+		}
 
-    const markerCount = countOccurrences(event.text, IMAGE_ATTACHMENT_INDICATOR);
-    if (markerCount === 0) {
-      pendingImages.length = 0;
-      return { action: "continue" as const };
-    }
+		const markerCount = countOccurrences(event.text, IMAGE_ATTACHMENT_INDICATOR);
+		if (markerCount === 0) {
+			pendingImages.length = 0;
+			return { action: "continue" as const };
+		}
 
-    const imagesToAttach = pendingImages.splice(0, markerCount);
-    if (imagesToAttach.length === 0) {
-      return { action: "continue" as const };
-    }
+		const imagesToAttach = pendingImages.splice(0, markerCount);
+		if (imagesToAttach.length === 0) {
+			return { action: "continue" as const };
+		}
 
-    return {
-      action: "transform" as const,
-      text: removeAttachmentIndicators(event.text),
-      images: [...(event.images ?? []), ...imagesToAttach],
-    };
-  });
+		return {
+			action: "transform" as const,
+			text: removeAttachmentIndicators(event.text),
+			images: [...(event.images ?? []), ...imagesToAttach],
+		};
+	});
 
-  registerImagePasteKeybindings(pi, pasteImageFromClipboard, { config, logger });
-  registerPasteImageCommand(pi, {
-    fromClipboard: pasteImageFromClipboard,
-    fromRecent: pasteImageFromRecent,
-  });
+	registerImagePasteKeybindings(pi, pasteImageFromClipboard, { config, logger });
+	registerPasteImageCommand(pi, {
+		fromClipboard: pasteImageFromClipboard,
+		fromRecent: pasteImageFromRecent,
+	});
 }

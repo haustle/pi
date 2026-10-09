@@ -1,31 +1,36 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import type { ExtensionAPI } from "../../../index.ts";
 import {
-  calculateImageRows,
-  Container,
-  getCapabilities,
-  getImageDimensions,
-  Image,
-  Spacer,
-  Text,
-  type Component,
+	type Component,
+	Container,
+	calculateImageRows,
+	getCapabilities,
+	getImageDimensions,
+	Image,
+	Spacer,
+	Text,
 } from "@earendil-works/pi-tui";
+import type { ExtensionAPI } from "../../../index.ts";
 
 import { isRecord } from "./config.js";
 import type { DebugLogger } from "./debug-logger.js";
 import { getErrorMessage } from "./errors.js";
-import { getBase64DecodedByteLength, assertImageWithinByteLimit } from "./image-size.js";
 import { mimeTypeToExtension } from "./image-mime.js";
+import { assertImageWithinByteLimit, getBase64DecodedByteLength } from "./image-size.js";
+import {
+	type BufferedCommandResult,
+	type PowerShellCommandResult,
+	type RunPowerShellCommandOptions,
+	runBufferedCommand,
+	runPowerShellCommandAsync,
+} from "./powershell.js";
 import { logPreviewEvent, logPreviewHandlerError } from "./preview-logging.js";
-import { runBufferedCommand, runPowerShellCommandAsync, type BufferedCommandResult, type PowerShellCommandResult, type RunPowerShellCommandOptions } from "./powershell.js";
 import { buildSixelRenderLines, ensureCompleteSixelSequence } from "./sixel-protocol.js";
 import {
-  DEFAULT_TERMINAL_IMAGE_WIDTH_CELLS,
-  type TerminalImageWidthOptions,
-  resolveTerminalImageWidthCells,
+	DEFAULT_TERMINAL_IMAGE_WIDTH_CELLS,
+	resolveTerminalImageWidthCells,
+	type TerminalImageWidthOptions,
 } from "./terminal-image-width.js";
 
 export const IMAGE_PREVIEW_CUSTOM_TYPE = "pi-image-tools-preview";
@@ -38,128 +43,119 @@ const FORCE_SIXEL_ENV_VAR = "PI_IMAGE_TOOLS_FORCE_SIXEL";
 const DISABLE_SIXEL_ENV_VAR = "PI_IMAGE_TOOLS_DISABLE_SIXEL";
 
 export type ImagePayload = {
-  type: "image";
-  data: string;
-  mimeType: string;
+	type: "image";
+	data: string;
+	mimeType: string;
 };
 
 type SixelConverter = "powershell-sixel" | "img2sixel";
 type SixelProcessRunner = (
-  command: string,
-  args: readonly string[],
-  options: { timeout: number; maxBuffer: number; windowsHide?: boolean },
+	command: string,
+	args: readonly string[],
+	options: { timeout: number; maxBuffer: number; windowsHide?: boolean },
 ) => Promise<BufferedCommandResult>;
 
-type SixelPowerShellRunner = (
-  script: string,
-  options: RunPowerShellCommandOptions,
-) => Promise<PowerShellCommandResult>;
+type SixelPowerShellRunner = (script: string, options: RunPowerShellCommandOptions) => Promise<PowerShellCommandResult>;
 
 type SixelAvailability = {
-  checked: boolean;
-  available: boolean;
-  converter?: SixelConverter;
-  version?: string;
-  reason?: string;
+	checked: boolean;
+	available: boolean;
+	converter?: SixelConverter;
+	version?: string;
+	reason?: string;
 };
 
 export type ImagePreviewItem = {
-  protocol: "sixel" | "native";
-  mimeType: string;
-  rows: number;
-  maxWidthCells: number;
-  sixelSequence?: string;
-  data?: string;
-  warning?: string;
+	protocol: "sixel" | "native";
+	mimeType: string;
+	rows: number;
+	maxWidthCells: number;
+	sixelSequence?: string;
+	data?: string;
+	warning?: string;
 };
 
 export type ImagePreviewDetails = {
-  items: ImagePreviewItem[];
+	items: ImagePreviewItem[];
 };
 
 interface ThemeLike {
-  fg(color: string, text: string): string;
+	fg(color: string, text: string): string;
 }
 
 class SixelImageComponent implements Component {
-  private readonly sequence: string;
-  private readonly rows: number;
+	private readonly sequence: string;
+	private readonly rows: number;
 
-  constructor(sequence: string, rows: number) {
-    this.sequence = sequence;
-    this.rows = rows;
-  }
+	constructor(sequence: string, rows: number) {
+		this.sequence = sequence;
+		this.rows = rows;
+	}
 
-  invalidate(): void {}
+	invalidate(): void {}
 
-  render(_width: number): string[] {
-    return buildSixelRenderLines(this.sequence, this.rows);
-  }
+	render(_width: number): string[] {
+		return buildSixelRenderLines(this.sequence, this.rows);
+	}
 }
 
 function normalizeText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+	return typeof value === "string" ? value.trim() : "";
 }
 
 function normalizeEnvValue(value: string | undefined): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+	return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
-  const normalized = normalizeEnvValue(value);
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+	const normalized = normalizeEnvValue(value);
+	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
 function shouldAttemptSixelRendering(
-  environment: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
+	environment: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
 ): boolean {
-  if (isTruthyEnvFlag(environment[DISABLE_SIXEL_ENV_VAR])) {
-    return false;
-  }
+	if (isTruthyEnvFlag(environment[DISABLE_SIXEL_ENV_VAR])) {
+		return false;
+	}
 
-  if (platform !== "win32" && platform !== "linux") {
-    return false;
-  }
+	if (platform !== "win32" && platform !== "linux") {
+		return false;
+	}
 
-  if (isTruthyEnvFlag(environment[FORCE_SIXEL_ENV_VAR])) {
-    return true;
-  }
+	if (isTruthyEnvFlag(environment[FORCE_SIXEL_ENV_VAR])) {
+		return true;
+	}
 
-  return !getCapabilities().images;
+	return !getCapabilities().images;
 }
 
 const sixelAvailabilityState: SixelAvailability = {
-  checked: false,
-  available: false,
+	checked: false,
+	available: false,
 };
 
-function resolveSixelAvailabilityState(
-  forceRefresh: boolean,
-  useCache: boolean,
-): SixelAvailability {
-  return useCache ? sixelAvailabilityState : { checked: false, available: false };
+function resolveSixelAvailabilityState(_forceRefresh: boolean, useCache: boolean): SixelAvailability {
+	return useCache ? sixelAvailabilityState : { checked: false, available: false };
 }
 
-function shouldShortCircuitSixelCheck(
-  state: SixelAvailability,
-  forceRefresh: boolean,
-): boolean {
-  return state.checked && !forceRefresh;
+function shouldShortCircuitSixelCheck(state: SixelAvailability, forceRefresh: boolean): boolean {
+	return state.checked && !forceRefresh;
 }
 
 async function ensureSixelModuleAvailable(
-  forceRefresh = false,
-  powerShellRunner: SixelPowerShellRunner = runPowerShellCommandAsync,
+	forceRefresh = false,
+	powerShellRunner: SixelPowerShellRunner = runPowerShellCommandAsync,
 ): Promise<SixelAvailability> {
-  const useCache = powerShellRunner === runPowerShellCommandAsync;
-  const state = resolveSixelAvailabilityState(forceRefresh, useCache);
+	const useCache = powerShellRunner === runPowerShellCommandAsync;
+	const state = resolveSixelAvailabilityState(forceRefresh, useCache);
 
-  if (shouldShortCircuitSixelCheck(state, forceRefresh)) {
-    return state;
-  }
+	if (shouldShortCircuitSixelCheck(state, forceRefresh)) {
+		return state;
+	}
 
-  const script = `
+	const script = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -171,145 +167,146 @@ if ($null -eq $module) {
 Write-Output ('Sixel/' + $module.Version.ToString())
 `;
 
-  const result = await powerShellRunner(script, {
-    timeout: POWER_SHELL_TIMEOUT_MS,
-    maxBuffer: POWER_SHELL_MAX_BUFFER_BYTES,
-  });
-  state.checked = true;
+	const result = await powerShellRunner(script, {
+		timeout: POWER_SHELL_TIMEOUT_MS,
+		maxBuffer: POWER_SHELL_MAX_BUFFER_BYTES,
+	});
+	state.checked = true;
 
-  if (!result.ok) {
-    const stderr = normalizeText(result.stderr);
-    const stdout = normalizeText(result.stdout);
-    state.available = false;
-    state.converter = undefined;
-    state.version = undefined;
-    state.reason =
-      stderr || stdout || result.reason || "Failed to detect the Sixel PowerShell module.";
-    return state;
-  }
+	if (!result.ok) {
+		const stderr = normalizeText(result.stderr);
+		const stdout = normalizeText(result.stdout);
+		state.available = false;
+		state.converter = undefined;
+		state.version = undefined;
+		state.reason = stderr || stdout || result.reason || "Failed to detect the Sixel PowerShell module.";
+		return state;
+	}
 
-  const marker = normalizeText(result.stdout)
-    .split(/\r?\n/)
-    .find((line) => line.startsWith("Sixel/"));
-  state.available = true;
-  state.converter = "powershell-sixel";
-  state.version = marker ? marker.slice("Sixel/".length) : undefined;
-  state.reason = undefined;
-  return state;
+	const marker = normalizeText(result.stdout)
+		.split(/\r?\n/)
+		.find((line) => line.startsWith("Sixel/"));
+	state.available = true;
+	state.converter = "powershell-sixel";
+	state.version = marker ? marker.slice("Sixel/".length) : undefined;
+	state.reason = undefined;
+	return state;
 }
 
 async function ensureLinuxSixelConverterAvailable(
-  forceRefresh = false,
-  processRunner: SixelProcessRunner = runBufferedCommand,
+	forceRefresh = false,
+	processRunner: SixelProcessRunner = runBufferedCommand,
 ): Promise<SixelAvailability> {
-  const useCache = processRunner === runBufferedCommand;
-  const state = resolveSixelAvailabilityState(forceRefresh, useCache);
+	const useCache = processRunner === runBufferedCommand;
+	const state = resolveSixelAvailabilityState(forceRefresh, useCache);
 
-  if (shouldShortCircuitSixelCheck(state, forceRefresh)) {
-    return state;
-  }
+	if (shouldShortCircuitSixelCheck(state, forceRefresh)) {
+		return state;
+	}
 
-  state.checked = true;
+	state.checked = true;
 
-  const result = await processRunner("img2sixel", ["--version"], {
-    timeout: 5_000,
-    maxBuffer: 1024 * 1024,
-  });
+	const result = await processRunner("img2sixel", ["--version"], {
+		timeout: 5_000,
+		maxBuffer: 1024 * 1024,
+	});
 
-  if (result.error) {
-    state.available = false;
-    state.converter = undefined;
-    state.version = undefined;
-    state.reason = isErrnoLike(result.error, "ENOENT")
-      ? "img2sixel is not installed. Install libsixel-bin or an equivalent package to enable Linux Sixel previews."
-      : getErrorMessage(result.error);
-    return state;
-  }
+	if (result.error) {
+		state.available = false;
+		state.converter = undefined;
+		state.version = undefined;
+		state.reason = isErrnoLike(result.error, "ENOENT")
+			? "img2sixel is not installed. Install libsixel-bin or an equivalent package to enable Linux Sixel previews."
+			: getErrorMessage(result.error);
+		return state;
+	}
 
-  if (result.status !== 0) {
-    state.available = false;
-    state.converter = undefined;
-    state.version = undefined;
-    state.reason = normalizeText(result.stderr.toString("utf8")) || normalizeText(result.stdout.toString("utf8")) || "img2sixel detection failed.";
-    return state;
-  }
+	if (result.status !== 0) {
+		state.available = false;
+		state.converter = undefined;
+		state.version = undefined;
+		state.reason =
+			normalizeText(result.stderr.toString("utf8")) ||
+			normalizeText(result.stdout.toString("utf8")) ||
+			"img2sixel detection failed.";
+		return state;
+	}
 
-  state.available = true;
-  state.converter = "img2sixel";
-  state.version = normalizeText(result.stdout.toString("utf8")).split(/\r?\n/)[0] || undefined;
-  state.reason = undefined;
-  return state;
+	state.available = true;
+	state.converter = "img2sixel";
+	state.version = normalizeText(result.stdout.toString("utf8")).split(/\r?\n/)[0] || undefined;
+	state.reason = undefined;
+	return state;
 }
 
 function ensureSixelConverterAvailable(
-  forceRefresh = false,
-  platform: NodeJS.Platform = process.platform,
-  processRunner: SixelProcessRunner = runBufferedCommand,
-  powerShellRunner: SixelPowerShellRunner = runPowerShellCommandAsync,
+	forceRefresh = false,
+	platform: NodeJS.Platform = process.platform,
+	processRunner: SixelProcessRunner = runBufferedCommand,
+	powerShellRunner: SixelPowerShellRunner = runPowerShellCommandAsync,
 ): Promise<SixelAvailability> {
-  if (platform === "linux") {
-    return ensureLinuxSixelConverterAvailable(forceRefresh, processRunner);
-  }
+	if (platform === "linux") {
+		return ensureLinuxSixelConverterAvailable(forceRefresh, processRunner);
+	}
 
-  return ensureSixelModuleAvailable(forceRefresh, powerShellRunner);
+	return ensureSixelModuleAvailable(forceRefresh, powerShellRunner);
 }
 
 function isErrnoLike(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code;
+	return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code;
 }
 
 function escapePowerShellSingleQuoted(value: string): string {
-  return value.replace(/'/g, "''");
+	return value.replace(/'/g, "''");
 }
 
 async function convertImageToSixelSequence(
-  image: ImagePayload,
-  converter: SixelConverter,
-  processRunner: SixelProcessRunner = runBufferedCommand,
-  powerShellRunner: SixelPowerShellRunner = runPowerShellCommandAsync,
+	image: ImagePayload,
+	converter: SixelConverter,
+	processRunner: SixelProcessRunner = runBufferedCommand,
+	powerShellRunner: SixelPowerShellRunner = runPowerShellCommandAsync,
 ): Promise<{ sequence?: string; error?: string }> {
-  const tempBaseDir = mkdtempSync(join(tmpdir(), "pi-image-tools-image-"));
-  const imagePath = join(tempBaseDir, `preview.${mimeTypeToExtension(image.mimeType)}`);
+	const tempBaseDir = mkdtempSync(join(tmpdir(), "pi-image-tools-image-"));
+	const imagePath = join(tempBaseDir, `preview.${mimeTypeToExtension(image.mimeType)}`);
 
-  try {
-    assertImageWithinByteLimit(getBase64DecodedByteLength(image.data), "Preview image");
-    const bytes = Buffer.from(image.data, "base64");
-    if (bytes.length === 0) {
-      return { error: "Image conversion failed: clipboard payload was empty." };
-    }
+	try {
+		assertImageWithinByteLimit(getBase64DecodedByteLength(image.data), "Preview image");
+		const bytes = Buffer.from(image.data, "base64");
+		if (bytes.length === 0) {
+			return { error: "Image conversion failed: clipboard payload was empty." };
+		}
 
-    writeFileSync(imagePath, bytes);
+		writeFileSync(imagePath, bytes);
 
-    if (converter === "img2sixel") {
-      const result = await processRunner("img2sixel", [imagePath], {
-        timeout: LINUX_SIXEL_TIMEOUT_MS,
-        maxBuffer: LINUX_SIXEL_MAX_BUFFER_BYTES,
-      });
+		if (converter === "img2sixel") {
+			const result = await processRunner("img2sixel", [imagePath], {
+				timeout: LINUX_SIXEL_TIMEOUT_MS,
+				maxBuffer: LINUX_SIXEL_MAX_BUFFER_BYTES,
+			});
 
-      if (result.error) {
-        return { error: `Sixel conversion failed: ${getErrorMessage(result.error)}` };
-      }
+			if (result.error) {
+				return { error: `Sixel conversion failed: ${getErrorMessage(result.error)}` };
+			}
 
-      if (result.status !== 0) {
-        const detail = normalizeText(result.stderr.toString("utf8")) || normalizeText(result.stdout.toString("utf8"));
-        return {
-          error: detail
-            ? `Sixel conversion failed: ${detail}`
-            : "Sixel conversion failed for an unknown reason.",
-        };
-      }
+			if (result.status !== 0) {
+				const detail =
+					normalizeText(result.stderr.toString("utf8")) || normalizeText(result.stdout.toString("utf8"));
+				return {
+					error: detail ? `Sixel conversion failed: ${detail}` : "Sixel conversion failed for an unknown reason.",
+				};
+			}
 
-      const normalized = ensureCompleteSixelSequence(result.stdout.toString("utf8"));
-      if (!normalized) {
-        return { error: "Sixel conversion produced empty output." };
-      }
+			const normalized = ensureCompleteSixelSequence(result.stdout.toString("utf8"));
+			if (!normalized) {
+				return { error: "Sixel conversion produced empty output." };
+			}
 
-      return { sequence: normalized };
-    }
+			return { sequence: normalized };
+		}
 
-    const escapedPath = escapePowerShellSingleQuoted(imagePath);
+		const escapedPath = escapePowerShellSingleQuoted(imagePath);
 
-    const script = `
+		const script = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -329,265 +326,261 @@ if ([string]::IsNullOrWhiteSpace($rendered)) {
 Write-Output $rendered
 `;
 
-    const result = await powerShellRunner(script, {
-      timeout: POWER_SHELL_TIMEOUT_MS,
-      maxBuffer: POWER_SHELL_MAX_BUFFER_BYTES,
-    });
-    if (!result.ok) {
-      const detail = normalizeText(result.stderr) || normalizeText(result.stdout) || result.reason;
-      return {
-        error: detail
-          ? `Sixel conversion failed: ${detail}`
-          : "Sixel conversion failed for an unknown reason.",
-      };
-    }
+		const result = await powerShellRunner(script, {
+			timeout: POWER_SHELL_TIMEOUT_MS,
+			maxBuffer: POWER_SHELL_MAX_BUFFER_BYTES,
+		});
+		if (!result.ok) {
+			const detail = normalizeText(result.stderr) || normalizeText(result.stdout) || result.reason;
+			return {
+				error: detail ? `Sixel conversion failed: ${detail}` : "Sixel conversion failed for an unknown reason.",
+			};
+		}
 
-    const normalized = ensureCompleteSixelSequence(result.stdout);
-    if (!normalized) {
-      return { error: "Sixel conversion produced empty output." };
-    }
+		const normalized = ensureCompleteSixelSequence(result.stdout);
+		if (!normalized) {
+			return { error: "Sixel conversion produced empty output." };
+		}
 
-    return { sequence: normalized };
-  } catch (error) {
-    return { error: `Sixel conversion failed: ${getErrorMessage(error)}` };
-  } finally {
-    try {
-      rmSync(tempBaseDir, { recursive: true, force: true });
-    } catch (error) {
-      // Temp-directory cleanup is best-effort; the OS reclaims leftover dirs.
-      void error;
-    }
-  }
+		return { sequence: normalized };
+	} catch (error) {
+		return { error: `Sixel conversion failed: ${getErrorMessage(error)}` };
+	} finally {
+		try {
+			rmSync(tempBaseDir, { recursive: true, force: true });
+		} catch (error) {
+			// Temp-directory cleanup is best-effort; the OS reclaims leftover dirs.
+			void error;
+		}
+	}
 }
 
 function estimateImageRows(image: ImagePayload, maxWidthCells: number): number {
-  const dimensions = getImageDimensions(image.data, image.mimeType);
-  if (!dimensions) {
-    return 12;
-  }
+	const dimensions = getImageDimensions(image.data, image.mimeType);
+	if (!dimensions) {
+		return 12;
+	}
 
-  return Math.max(1, Math.min(calculateImageRows(dimensions, maxWidthCells), 80));
+	return Math.max(1, Math.min(calculateImageRows(dimensions, maxWidthCells), 80));
 }
 
 function parseImagePreviewDetails(value: unknown): ImagePreviewDetails | null {
-  if (!isRecord(value)) {
-    return null;
-  }
+	if (!isRecord(value)) {
+		return null;
+	}
 
-  const itemsRaw = value.items;
-  if (!Array.isArray(itemsRaw)) {
-    return null;
-  }
+	const itemsRaw = value.items;
+	if (!Array.isArray(itemsRaw)) {
+		return null;
+	}
 
-  const items: ImagePreviewItem[] = [];
-  for (const raw of itemsRaw) {
-    if (!isRecord(raw)) {
-      continue;
-    }
+	const items: ImagePreviewItem[] = [];
+	for (const raw of itemsRaw) {
+		if (!isRecord(raw)) {
+			continue;
+		}
 
-    const itemRecord = raw;
-    const protocol = itemRecord.protocol === "sixel" ? "sixel" : "native";
-    const mimeType = typeof itemRecord.mimeType === "string" ? itemRecord.mimeType : "image/png";
-    const rows =
-      typeof itemRecord.rows === "number" && Number.isFinite(itemRecord.rows)
-        ? Math.max(1, Math.min(Math.trunc(itemRecord.rows), 80))
-        : 12;
-    const maxWidthCells =
-      typeof itemRecord.maxWidthCells === "number" && Number.isFinite(itemRecord.maxWidthCells)
-        ? Math.max(4, Math.min(Math.trunc(itemRecord.maxWidthCells), 240))
-        : DEFAULT_TERMINAL_IMAGE_WIDTH_CELLS;
-    const sixelSequence =
-      typeof itemRecord.sixelSequence === "string" ? itemRecord.sixelSequence : undefined;
-    const data = typeof itemRecord.data === "string" ? itemRecord.data : undefined;
-    const warning = typeof itemRecord.warning === "string" ? itemRecord.warning : undefined;
+		const itemRecord = raw;
+		const protocol = itemRecord.protocol === "sixel" ? "sixel" : "native";
+		const mimeType = typeof itemRecord.mimeType === "string" ? itemRecord.mimeType : "image/png";
+		const rows =
+			typeof itemRecord.rows === "number" && Number.isFinite(itemRecord.rows)
+				? Math.max(1, Math.min(Math.trunc(itemRecord.rows), 80))
+				: 12;
+		const maxWidthCells =
+			typeof itemRecord.maxWidthCells === "number" && Number.isFinite(itemRecord.maxWidthCells)
+				? Math.max(4, Math.min(Math.trunc(itemRecord.maxWidthCells), 240))
+				: DEFAULT_TERMINAL_IMAGE_WIDTH_CELLS;
+		const sixelSequence = typeof itemRecord.sixelSequence === "string" ? itemRecord.sixelSequence : undefined;
+		const data = typeof itemRecord.data === "string" ? itemRecord.data : undefined;
+		const warning = typeof itemRecord.warning === "string" ? itemRecord.warning : undefined;
 
-    if (protocol === "sixel" && !sixelSequence) {
-      continue;
-    }
+		if (protocol === "sixel" && !sixelSequence) {
+			continue;
+		}
 
-    if (protocol === "native" && !data) {
-      continue;
-    }
+		if (protocol === "native" && !data) {
+			continue;
+		}
 
-    items.push({
-      protocol,
-      mimeType,
-      rows,
-      maxWidthCells,
-      sixelSequence,
-      data,
-      warning,
-    });
-  }
+		items.push({
+			protocol,
+			mimeType,
+			rows,
+			maxWidthCells,
+			sixelSequence,
+			data,
+			warning,
+		});
+	}
 
-  if (items.length === 0) {
-    return null;
-  }
+	if (items.length === 0) {
+		return null;
+	}
 
-  return { items };
+	return { items };
 }
 
 export type BuildPreviewItemsOptions = TerminalImageWidthOptions & {
-  environment?: NodeJS.ProcessEnv;
-  logger?: DebugLogger;
-  platform?: NodeJS.Platform;
-  sixelProcessRunner?: SixelProcessRunner;
-  sixelPowerShellRunner?: SixelPowerShellRunner;
+	environment?: NodeJS.ProcessEnv;
+	logger?: DebugLogger;
+	platform?: NodeJS.Platform;
+	sixelProcessRunner?: SixelProcessRunner;
+	sixelPowerShellRunner?: SixelPowerShellRunner;
 };
 
 export async function buildPreviewItems(
-  images: readonly ImagePayload[],
-  options: BuildPreviewItemsOptions = {},
+	images: readonly ImagePayload[],
+	options: BuildPreviewItemsOptions = {},
 ): Promise<ImagePreviewItem[]> {
-  const selectedImages = images.slice(0, MAX_IMAGES_PER_MESSAGE);
-  if (selectedImages.length === 0) {
-    return [];
-  }
+	const selectedImages = images.slice(0, MAX_IMAGES_PER_MESSAGE);
+	if (selectedImages.length === 0) {
+		return [];
+	}
 
-  const maxWidthCells = resolveTerminalImageWidthCells(options);
-  const platform = options.platform ?? process.platform;
-  const processRunner = options.sixelProcessRunner ?? runBufferedCommand;
-  const powerShellRunner = options.sixelPowerShellRunner ?? runPowerShellCommandAsync;
-  const attemptSixel = shouldAttemptSixelRendering(options.environment, platform);
-  const sixelState = attemptSixel
-    ? await ensureSixelConverterAvailable(false, platform, processRunner, powerShellRunner)
-    : undefined;
+	const maxWidthCells = resolveTerminalImageWidthCells(options);
+	const platform = options.platform ?? process.platform;
+	const processRunner = options.sixelProcessRunner ?? runBufferedCommand;
+	const powerShellRunner = options.sixelPowerShellRunner ?? runPowerShellCommandAsync;
+	const attemptSixel = shouldAttemptSixelRendering(options.environment, platform);
+	const sixelState = attemptSixel
+		? await ensureSixelConverterAvailable(false, platform, processRunner, powerShellRunner)
+		: undefined;
 
-  logPreviewEvent(options.logger, "image-preview.sixel.detected", {
-    attemptSixel,
-    available: sixelState?.available ?? false,
-    converter: sixelState?.converter ?? null,
-    reason: sixelState?.reason ?? null,
-    platform,
-  });
+	logPreviewEvent(options.logger, "image-preview.sixel.detected", {
+		attemptSixel,
+		available: sixelState?.available ?? false,
+		converter: sixelState?.converter ?? null,
+		reason: sixelState?.reason ?? null,
+		platform,
+	});
 
-  const items: ImagePreviewItem[] = [];
-  for (const image of selectedImages) {
-    const rows = estimateImageRows(image, maxWidthCells);
+	const items: ImagePreviewItem[] = [];
+	for (const image of selectedImages) {
+		const rows = estimateImageRows(image, maxWidthCells);
 
-    if (attemptSixel && sixelState?.available && sixelState.converter) {
-      const conversion = await convertImageToSixelSequence(image, sixelState.converter, processRunner, powerShellRunner);
-      if (conversion.sequence) {
-        logPreviewEvent(options.logger, "image-preview.sixel.converted", {
-          converter: sixelState.converter,
-          mimeType: image.mimeType,
-          rows,
-          maxWidthCells,
-        });
-        items.push({
-          protocol: "sixel",
-          mimeType: image.mimeType,
-          rows,
-          maxWidthCells,
-          sixelSequence: conversion.sequence,
-        });
-        continue;
-      }
+		if (attemptSixel && sixelState?.available && sixelState.converter) {
+			const conversion = await convertImageToSixelSequence(
+				image,
+				sixelState.converter,
+				processRunner,
+				powerShellRunner,
+			);
+			if (conversion.sequence) {
+				logPreviewEvent(options.logger, "image-preview.sixel.converted", {
+					converter: sixelState.converter,
+					mimeType: image.mimeType,
+					rows,
+					maxWidthCells,
+				});
+				items.push({
+					protocol: "sixel",
+					mimeType: image.mimeType,
+					rows,
+					maxWidthCells,
+					sixelSequence: conversion.sequence,
+				});
+				continue;
+			}
 
-      logPreviewEvent(options.logger, "image-preview.sixel.conversion_failed", {
-        converter: sixelState.converter,
-        mimeType: image.mimeType,
-        error: conversion.error ?? "unknown",
-      });
+			logPreviewEvent(options.logger, "image-preview.sixel.conversion_failed", {
+				converter: sixelState.converter,
+				mimeType: image.mimeType,
+				error: conversion.error ?? "unknown",
+			});
 
-      items.push({
-        protocol: "native",
-        mimeType: image.mimeType,
-        rows,
-        maxWidthCells,
-        data: image.data,
-        warning: conversion.error,
-      });
-      continue;
-    }
+			items.push({
+				protocol: "native",
+				mimeType: image.mimeType,
+				rows,
+				maxWidthCells,
+				data: image.data,
+				warning: conversion.error,
+			});
+			continue;
+		}
 
-    items.push({
-      protocol: "native",
-      mimeType: image.mimeType,
-      rows,
-      maxWidthCells,
-      data: image.data,
-      warning:
-        attemptSixel && sixelState && !sixelState.available
-          ? `Sixel preview unavailable: ${sixelState.reason || "missing Sixel converter."}`
-          : undefined,
-    });
-  }
+		items.push({
+			protocol: "native",
+			mimeType: image.mimeType,
+			rows,
+			maxWidthCells,
+			data: image.data,
+			warning:
+				attemptSixel && sixelState && !sixelState.available
+					? `Sixel preview unavailable: ${sixelState.reason || "missing Sixel converter."}`
+					: undefined,
+		});
+	}
 
-  return items;
+	return items;
 }
 
 export interface RegisterImagePreviewDisplayOptions {
-  logger?: DebugLogger;
+	logger?: DebugLogger;
 }
 
-export function registerImagePreviewDisplay(
-  pi: ExtensionAPI,
-  options: RegisterImagePreviewDisplayOptions = {},
-): void {
-  let warnedSixelSetup = false;
+export function registerImagePreviewDisplay(pi: ExtensionAPI, options: RegisterImagePreviewDisplayOptions = {}): void {
+	let warnedSixelSetup = false;
 
-  pi.registerMessageRenderer<ImagePreviewDetails>(
-    IMAGE_PREVIEW_CUSTOM_TYPE,
-    (message, _options, theme) => {
-      const details = parseImagePreviewDetails(message.details);
-      if (!details) {
-        return undefined;
-      }
+	pi.registerMessageRenderer<ImagePreviewDetails>(IMAGE_PREVIEW_CUSTOM_TYPE, (message, _options, theme) => {
+		const details = parseImagePreviewDetails(message.details);
+		if (!details) {
+			return undefined;
+		}
 
-      const uiTheme = theme as unknown as ThemeLike;
-      const container = new Container();
-      const imageCount = details.items.length;
-      const imageLabel = imageCount === 1 ? "image" : "images";
+		const uiTheme = theme as unknown as ThemeLike;
+		const container = new Container();
+		const imageCount = details.items.length;
+		const imageLabel = imageCount === 1 ? "image" : "images";
 
-      container.addChild(new Spacer(1));
-      container.addChild(new Text(uiTheme.fg("muted", `↳ pasted ${imageLabel} preview`), 0, 0));
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(uiTheme.fg("muted", `↳ pasted ${imageLabel} preview`), 0, 0));
 
-      for (const item of details.items) {
-        container.addChild(new Spacer(1));
+		for (const item of details.items) {
+			container.addChild(new Spacer(1));
 
-        if (item.protocol === "sixel" && item.sixelSequence) {
-          container.addChild(new SixelImageComponent(item.sixelSequence, item.rows));
-        } else if (item.data) {
-          container.addChild(
-            new Image(
-              item.data,
-              item.mimeType,
-              {
-                fallbackColor: (text: string) => uiTheme.fg("toolOutput", text),
-              },
-              {
-                maxWidthCells: item.maxWidthCells,
-              },
-            ),
-          );
-        }
+			if (item.protocol === "sixel" && item.sixelSequence) {
+				container.addChild(new SixelImageComponent(item.sixelSequence, item.rows));
+			} else if (item.data) {
+				container.addChild(
+					new Image(
+						item.data,
+						item.mimeType,
+						{
+							fallbackColor: (text: string) => uiTheme.fg("toolOutput", text),
+						},
+						{
+							maxWidthCells: item.maxWidthCells,
+						},
+					),
+				);
+			}
 
-        if (item.warning) {
-          container.addChild(new Text(uiTheme.fg("warning", item.warning), 0, 0));
-        }
-      }
+			if (item.warning) {
+				container.addChild(new Text(uiTheme.fg("warning", item.warning), 0, 0));
+			}
+		}
 
-      return container;
-    },
-  );
+		return container;
+	});
 
-  pi.on("session_start", async (_event, ctx) => {
-    try {
-      if (!shouldAttemptSixelRendering()) {
-        return;
-      }
+	pi.on("session_start", async (_event, ctx) => {
+		try {
+			if (!shouldAttemptSixelRendering()) {
+				return;
+			}
 
-      const availability = await ensureSixelConverterAvailable();
-      if (!availability.available && !warnedSixelSetup && ctx.hasUI) {
-        warnedSixelSetup = true;
-        ctx.ui.notify(
-          `Image preview fallback active: ${availability.reason || "Sixel module unavailable."}`,
-          "warning",
-        );
-      }
-    } catch (error) {
-      logPreviewHandlerError(options.logger, "image-preview.session_start_failed", error);
-    }
-  });
+			const availability = await ensureSixelConverterAvailable();
+			if (!availability.available && !warnedSixelSetup && ctx.hasUI) {
+				warnedSixelSetup = true;
+				ctx.ui.notify(
+					`Image preview fallback active: ${availability.reason || "Sixel module unavailable."}`,
+					"warning",
+				);
+			}
+		} catch (error) {
+			logPreviewHandlerError(options.logger, "image-preview.session_start_failed", error);
+		}
+	});
 }

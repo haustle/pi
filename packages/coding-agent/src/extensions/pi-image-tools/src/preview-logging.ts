@@ -9,20 +9,16 @@ import { getErrorMessage } from "./errors.js";
  * here keeps both preview renderers consistent and avoids duplicated guards.
  */
 export function logPreviewEvent(
-  logger: DebugLogger | undefined,
-  event: string,
-  fields: Record<string, unknown> = {},
+	logger: DebugLogger | undefined,
+	event: string,
+	fields: Record<string, unknown> = {},
 ): void {
-  logger?.log(event, fields);
+	logger?.log(event, fields);
 }
 
 /**
  * Best-effort debug logging for a caught error inside a Pi event handler.
  */
-export function logPreviewHandlerError(
-  logger: DebugLogger | undefined,
-  event: string,
-  error: unknown,
-): void {
-  logPreviewEvent(logger, event, { error: getErrorMessage(error) });
+export function logPreviewHandlerError(logger: DebugLogger | undefined, event: string, error: unknown): void {
+	logPreviewEvent(logger, event, { error: getErrorMessage(error) });
 }

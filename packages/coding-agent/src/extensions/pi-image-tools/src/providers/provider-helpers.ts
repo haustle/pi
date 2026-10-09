@@ -1,16 +1,16 @@
-import { buildNamespaceWrappedCommand, defaultCommandExists, type CommandExists } from "../shell-environment.js";
+import { buildNamespaceWrappedCommand, type CommandExists, defaultCommandExists } from "../shell-environment.js";
 import {
-  defaultCommandRunner,
-  MAX_BUFFER_BYTES,
-  READ_TIMEOUT_MS,
-  type CommandResult,
-  type CommandRunner,
+	type CommandResult,
+	type CommandRunner,
+	defaultCommandRunner,
+	MAX_BUFFER_BYTES,
+	READ_TIMEOUT_MS,
 } from "./command-runner.js";
 import type {
-  ClipboardImageProvider,
-  ClipboardProviderContext,
-  ClipboardReadResult,
-  ProviderCapabilities,
+	ClipboardImageProvider,
+	ClipboardProviderContext,
+	ClipboardReadResult,
+	ProviderCapabilities,
 } from "./types.js";
 
 // Re-export the symbols command-based providers reference in their read
@@ -30,24 +30,24 @@ export type { ClipboardProviderContext, ClipboardReadResult } from "./types.js";
  * `PowerShellCommandResult` (string stdout) satisfy this structural contract.
  */
 interface ProviderReadResult {
-  missingCommand: boolean;
-  ok: boolean;
-  stdout: { length: number };
+	missingCommand: boolean;
+	ok: boolean;
+	stdout: { length: number };
 }
 
 /** Result returned when the provider's command is not installed. */
 export function providerUnavailable(): { available: false; image: null } {
-  return { available: false, image: null };
+	return { available: false, image: null };
 }
 
 /** Result returned when the clipboard is available but holds no image. */
 export function providerEmptyImage(): { available: true; image: null } {
-  return { available: true, image: null };
+	return { available: true, image: null };
 }
 
 /** Result returned when a provider successfully read an image. */
 export function providerImageResult(bytes: Uint8Array, mimeType: string): ClipboardReadResult {
-  return { available: true, image: { bytes, mimeType } };
+	return { available: true, image: { bytes, mimeType } };
 }
 
 /**
@@ -55,16 +55,16 @@ export function providerImageResult(bytes: Uint8Array, mimeType: string): Clipbo
  * external command whose presence is verified via `commandExists`.
  */
 export function createCommandAvailabilityChecker(
-  commandName: string,
-  commandExists: CommandExists = defaultCommandExists,
+	commandName: string,
+	commandExists: CommandExists = defaultCommandExists,
 ): (context: ClipboardProviderContext) => boolean {
-  return (context: ClipboardProviderContext): boolean => {
-    try {
-      return commandExists(commandName, context);
-    } catch {
-      return false;
-    }
-  };
+	return (context: ClipboardProviderContext): boolean => {
+		try {
+			return commandExists(commandName, context);
+		} catch {
+			return false;
+		}
+	};
 }
 
 /**
@@ -72,15 +72,15 @@ export function createCommandAvailabilityChecker(
  * Returns `null` when the caller should continue processing the result.
  */
 export function mapProviderReadFallback(
-  result: ProviderReadResult,
-  requireNonEmptyStdout = true,
+	result: ProviderReadResult,
+	requireNonEmptyStdout = true,
 ): { available: false; image: null } | { available: true; image: null } | null {
-  if (result.missingCommand) {
-    return providerUnavailable();
-  }
+	if (result.missingCommand) {
+		return providerUnavailable();
+	}
 
-  const isEmpty = !result.ok || (requireNonEmptyStdout && result.stdout.length === 0);
-  return isEmpty ? providerEmptyImage() : null;
+	const isEmpty = !result.ok || (requireNonEmptyStdout && result.stdout.length === 0);
+	return isEmpty ? providerEmptyImage() : null;
 }
 
 /**
@@ -90,24 +90,24 @@ export function mapProviderReadFallback(
  * the parse chain is not duplicated per provider.
  */
 export function parseMimeTypeList(stdout: Buffer): string[] {
-  return stdout
-    .toString("utf8")
-    .split(/\r?\n/)
-    .map((mimeType) => mimeType.trim())
-    .filter((mimeType) => mimeType.length > 0);
+	return stdout
+		.toString("utf8")
+		.split(/\r?\n/)
+		.map((mimeType) => mimeType.trim())
+		.filter((mimeType) => mimeType.length > 0);
 }
 
 /** Options shared by namespace-wrapped (macOS) command providers. */
 export interface NamespacedCommandProviderOptions {
-  priority?: number;
-  commandRunner?: CommandRunner;
-  commandExists?: CommandExists;
+	priority?: number;
+	commandRunner?: CommandRunner;
+	commandExists?: CommandExists;
 }
 
 /** Options shared by plain command-runner (Linux) providers. */
 export interface CommandRunnerProviderOptions {
-  priority?: number;
-  commandRunner?: CommandRunner;
+	priority?: number;
+	commandRunner?: CommandRunner;
 }
 
 /**
@@ -118,46 +118,46 @@ export interface CommandRunnerProviderOptions {
  * their command args and how to turn stdout into an image.
  */
 export abstract class NamespacedCommandProvider implements ClipboardImageProvider {
-  readonly capabilities: ProviderCapabilities;
-  private readonly commandRunner: CommandRunner;
-  private readonly commandExists: CommandExists;
-  private readonly isAvailableFn: (context: ClipboardProviderContext) => boolean;
-  private readonly commandName: string;
+	readonly capabilities: ProviderCapabilities;
+	private readonly commandRunner: CommandRunner;
+	private readonly commandExists: CommandExists;
+	private readonly isAvailableFn: (context: ClipboardProviderContext) => boolean;
+	private readonly commandName: string;
 
-  constructor(
-    capabilities: ProviderCapabilities,
-    commandName: string,
-    options: NamespacedCommandProviderOptions = {},
-  ) {
-    this.capabilities = capabilities;
-    this.commandName = commandName;
-    this.commandRunner = options.commandRunner ?? defaultCommandRunner;
-    this.commandExists = options.commandExists ?? defaultCommandExists;
-    this.isAvailableFn = createCommandAvailabilityChecker(this.commandName, this.commandExists);
-  }
+	constructor(
+		capabilities: ProviderCapabilities,
+		commandName: string,
+		options: NamespacedCommandProviderOptions = {},
+	) {
+		this.capabilities = capabilities;
+		this.commandName = commandName;
+		this.commandRunner = options.commandRunner ?? defaultCommandRunner;
+		this.commandExists = options.commandExists ?? defaultCommandExists;
+		this.isAvailableFn = createCommandAvailabilityChecker(this.commandName, this.commandExists);
+	}
 
-  isAvailable(context: ClipboardProviderContext): boolean {
-    return this.isAvailableFn(context);
-  }
+	isAvailable(context: ClipboardProviderContext): boolean {
+		return this.isAvailableFn(context);
+	}
 
-  read(context: ClipboardProviderContext): ClipboardReadResult {
-    const wrapped = buildNamespaceWrappedCommand(this.commandName, this.buildArgs(), context, this.commandExists);
-    const result = this.commandRunner(wrapped.command, wrapped.args, {
-      environment: context.environment,
-      maxBuffer: MAX_BUFFER_BYTES,
-      timeout: READ_TIMEOUT_MS,
-    });
+	read(context: ClipboardProviderContext): ClipboardReadResult {
+		const wrapped = buildNamespaceWrappedCommand(this.commandName, this.buildArgs(), context, this.commandExists);
+		const result = this.commandRunner(wrapped.command, wrapped.args, {
+			environment: context.environment,
+			maxBuffer: MAX_BUFFER_BYTES,
+			timeout: READ_TIMEOUT_MS,
+		});
 
-    const fallback = mapProviderReadFallback(result);
-    if (fallback) {
-      return fallback;
-    }
+		const fallback = mapProviderReadFallback(result);
+		if (fallback) {
+			return fallback;
+		}
 
-    return this.readFromResult(result);
-  }
+		return this.readFromResult(result);
+	}
 
-  protected abstract buildArgs(): readonly string[];
-  protected abstract readFromResult(result: CommandResult): ClipboardReadResult;
+	protected abstract buildArgs(): readonly string[];
+	protected abstract readFromResult(result: CommandResult): ClipboardReadResult;
 }
 
 /**
@@ -167,32 +167,32 @@ export abstract class NamespacedCommandProvider implements ClipboardImageProvide
  * implement `read`.
  */
 export abstract class CommandRunnerProvider implements ClipboardImageProvider {
-  readonly capabilities: ProviderCapabilities;
-  protected readonly commandRunner: CommandRunner;
+	readonly capabilities: ProviderCapabilities;
+	protected readonly commandRunner: CommandRunner;
 
-  constructor(capabilities: ProviderCapabilities, options: CommandRunnerProviderOptions = {}) {
-    this.capabilities = capabilities;
-    this.commandRunner = options.commandRunner ?? defaultCommandRunner;
-  }
+	constructor(capabilities: ProviderCapabilities, options: CommandRunnerProviderOptions = {}) {
+		this.capabilities = capabilities;
+		this.commandRunner = options.commandRunner ?? defaultCommandRunner;
+	}
 
-  isAvailable(_context: ClipboardProviderContext): boolean {
-    return true;
-  }
+	isAvailable(_context: ClipboardProviderContext): boolean {
+		return true;
+	}
 
-  protected runCommand(
-    command: string,
-    args: readonly string[],
-    context: ClipboardProviderContext,
-    timeout: number = READ_TIMEOUT_MS,
-  ): CommandResult {
-    return this.commandRunner(command, args, {
-      environment: context.environment,
-      maxBuffer: MAX_BUFFER_BYTES,
-      timeout,
-    });
-  }
+	protected runCommand(
+		command: string,
+		args: readonly string[],
+		context: ClipboardProviderContext,
+		timeout: number = READ_TIMEOUT_MS,
+	): CommandResult {
+		return this.commandRunner(command, args, {
+			environment: context.environment,
+			maxBuffer: MAX_BUFFER_BYTES,
+			timeout,
+		});
+	}
 
-  abstract read(context: ClipboardProviderContext): ClipboardReadResult;
+	abstract read(context: ClipboardProviderContext): ClipboardReadResult;
 }
 
 export type { ClipboardImageProvider };
