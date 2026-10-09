@@ -32,6 +32,10 @@ export interface CompactionSettings {
 	modelOverrides?: Record<string, CompactionModelOverride>; // exact "provider/modelId" keys
 }
 
+export interface HandoffSettings {
+	enabled?: boolean; // default: true - replace threshold compaction with a forced handoff
+}
+
 export interface BranchSummarySettings {
 	reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
 	skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
@@ -141,6 +145,7 @@ export interface Settings {
 	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
 	compaction?: CompactionSettings;
+	handoff?: HandoffSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
@@ -994,6 +999,20 @@ export class SettingsManager {
 			reserveTokens: this.getCompactionReserveTokens(model),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
 		};
+	}
+
+	/** When enabled, the threshold compaction trigger is replaced by a forced handoff. */
+	getHandoffEnabled(): boolean {
+		return this.settings.handoff?.enabled ?? true;
+	}
+
+	setHandoffEnabled(enabled: boolean): void {
+		if (!this.globalSettings.handoff) {
+			this.globalSettings.handoff = {};
+		}
+		this.globalSettings.handoff.enabled = enabled;
+		this.markModified("handoff", "enabled");
+		this.save();
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {

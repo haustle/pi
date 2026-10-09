@@ -47,6 +47,7 @@ type RebindContext = {
 	subscribeToAgent: () => void;
 	updateAvailableProviderCount: () => Promise<void>;
 	updateEditorBorderColor: () => void;
+	updateHandoffMode: () => void;
 	updateTerminalTitle: () => void;
 };
 
@@ -265,6 +266,7 @@ describe("regression #5943: session_start transient UI", () => {
 				subscribeToAgent: () => events.push("subscribe"),
 				updateAvailableProviderCount: async () => {},
 				updateEditorBorderColor: () => {},
+				updateHandoffMode: () => {},
 				updateTerminalTitle: () => {},
 			};
 
@@ -315,6 +317,7 @@ describe("regression #5943: session_start transient UI", () => {
 				},
 				updateAvailableProviderCount: async () => {},
 				updateEditorBorderColor: () => {},
+				updateHandoffMode: () => {},
 				updateTerminalTitle: () => {},
 			};
 
@@ -368,6 +371,7 @@ describe("regression #5943: session_start transient UI", () => {
 				},
 				updateAvailableProviderCount: async () => {},
 				updateEditorBorderColor: () => {},
+				updateHandoffMode: () => {},
 				updateTerminalTitle: () => {},
 			};
 

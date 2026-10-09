@@ -160,7 +160,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-	const settingsManager = SettingsManager.inMemory(options.settings);
+	// The harness defaults to compaction behavior; handoff tests opt in explicitly.
+	const settingsManager = SettingsManager.inMemory({
+		...options.settings,
+		handoff: { enabled: false, ...options.settings?.handoff },
+	});
 
 	const authStorage = AuthStorage.inMemory();
 	if (withConfiguredAuth) {

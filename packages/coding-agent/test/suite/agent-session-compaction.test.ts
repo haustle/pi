@@ -925,6 +925,34 @@ describe("AgentSession compaction characterization", () => {
 		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
 	});
 
+	it("skips threshold compaction when handoff mode is enabled", async () => {
+		const harness = await createHarness({ settings: { handoff: { enabled: true } } });
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const successfulAssistant = createAssistant(harness, {
+			stopReason: "stop",
+			totalTokens: 190_000,
+			timestamp: Date.now(),
+		});
+		const errorAssistant = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage: "529 overloaded",
+			timestamp: Date.now() + 1000,
+		});
+		harness.session.agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: Date.now() - 1000 },
+			successfulAssistant,
+			{ role: "user", content: [{ type: "text", text: "retry" }], timestamp: Date.now() + 500 },
+			errorAssistant,
+		];
+
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+
+		await sessionInternals._checkCompaction(errorAssistant);
+
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+	});
+
 	it("does not trigger threshold compaction for error messages when no prior usage exists", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

@@ -179,7 +179,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { formatSessionDate, SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
-import { SnackbarComponent, SNACKBAR_DURATION_MS, type SnackbarKind } from "./components/snackbar.ts";
+import { SNACKBAR_DURATION_MS, SnackbarComponent, type SnackbarKind } from "./components/snackbar.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -216,6 +216,7 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import { orderThreadHierarchy } from "./thread-hierarchy.ts";
 import { ThreadUIContext } from "./thread-ui-context.ts";
 import { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
@@ -612,6 +613,9 @@ export class InteractiveMode {
 
 	// Auto-compaction state
 	private autoCompactionEscapeHandler?: () => void;
+
+	// Handoff mode: the thread is past the compaction threshold and the next plain prompt seeds a new thread.
+	private handoffMode = false;
 
 	// Auto-retry state
 	private retryEscapeHandler?: () => void;
@@ -2283,6 +2287,16 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 
 	/** Note background work on the editor's bottom border, pointing at the thread switcher. */
 	private updateBackgroundThreadsLabel(): void {
+		const editors = new Set([this.defaultEditor, this.editor]);
+		if (this.handoffMode) {
+			const label = `HANDOFF MODE · describe the next thread's goal · Esc to dismiss`;
+			for (const editor of editors) {
+				(editor as { setBottomLabel?: (label: string | undefined) => void }).setBottomLabel?.(label);
+			}
+			this.ui.requestRender();
+			return;
+		}
+
 		let working = 0;
 		let needsInput = 0;
 		for (const session of this.runtimeHost.backgroundSessions) {
@@ -2296,7 +2310,7 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 			parts.push(`${needsInput} thread${needsInput === 1 ? "" : "s"} need${needsInput === 1 ? "s" : ""} input`);
 		if (working > 0) parts.push(`${working} thread${working === 1 ? "" : "s"} working`);
 		const label = parts.length > 0 ? `${parts.join(", ")} · ${keyText("app.threads.open")}` : undefined;
-		for (const editor of new Set([this.defaultEditor, this.editor])) {
+		for (const editor of editors) {
 			(editor as { setBottomLabel?: (label: string | undefined) => void }).setBottomLabel?.(label);
 		}
 		this.ui.requestRender();
@@ -2386,6 +2400,7 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
+		this.updateHandoffMode();
 		this.updateTerminalTitle();
 	}
 
@@ -3376,6 +3391,8 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 		this.defaultEditor.onEscape = () => {
 			if (this.session.isStreaming) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
+			} else if (this.handoffMode) {
+				this.setHandoffMode(false);
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
 			} else if (this.isBashMode) {
@@ -3692,6 +3709,17 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 				return;
 			}
 
+			// Handoff mode: a plain prompt is the goal for the next thread, not a turn here.
+			if (this.handoffMode && !text.startsWith("/")) {
+				this.editor.addToHistory?.(text);
+				this.editor.setText("");
+				// The handoff extension owns the command; route through the normal prompt path.
+				const dispatch = `/handoff ${text}`;
+				if (this.onInputCallback) this.onInputCallback(dispatch);
+				else this.pendingUserInputs.push(dispatch);
+				return;
+			}
+
 			// Normal message submission
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
@@ -3971,6 +3999,7 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				this.updateHandoffMode();
 
 				this.ui.requestRender();
 				break;
@@ -4002,6 +4031,7 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 					this.autoCompactionEscapeHandler = undefined;
 				}
 				this.clearStatusIndicator("compaction");
+				this.setHandoffMode(false);
 				if (event.aborted) {
 					if (event.reason === "manual") {
 						this.showError("Compaction cancelled");
@@ -4901,7 +4931,9 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 	}
 
 	private updateEditorBorderColor(): void {
-		if (this.isBashMode) {
+		if (this.handoffMode) {
+			this.editor.borderColor = theme.getHandoffBorderColor();
+		} else if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
 		} else {
 			const level = this.session.thinkingLevel || "off";
@@ -5302,6 +5334,7 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					handoffEnabled: this.settingsManager.getHandoffEnabled(),
 					defaultModel,
 					currentModel: this.session.model,
 					availableDefaultModels: this.session.modelRuntime.getAvailableSnapshot(),
@@ -5347,6 +5380,11 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onHandoffEnabledChange: (enabled) => {
+						this.settingsManager.setHandoffEnabled(enabled);
+						if (!enabled) this.setHandoffMode(false);
+						else this.updateHandoffMode();
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
@@ -6096,14 +6134,23 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 	 * Entries for the command palette. `threads` shows only the thread switcher for `app.threads.open`;
 	 * `all` prioritizes pi-specific commands and omits threads entirely.
 	 */
-	/** One palette row per thread, with its live status in place of the date while it has one. */
-	private threadPaletteEntry(session: SessionInfo, status: ThreadStatus | undefined): PaletteEntry {
+	/**
+	 * One palette row per thread, with its live status in place of the date while it has one.
+	 * Handoff children are indented under their parent and marked with a corner glyph.
+	 */
+	private threadPaletteEntry(
+		session: SessionInfo,
+		status: ThreadStatus | undefined,
+		depth = 0,
+		parent?: SessionInfo,
+	): PaletteEntry {
 		const isWorking = status !== undefined && status.kind !== "finished" && status.activity === "working";
+		const name = session.name ?? session.firstMessage;
 		return {
 			category: "thread",
 			key: session.path,
-			label: session.name ?? session.firstMessage,
-			keywords: session.cwd,
+			label: depth > 0 ? `${"  ".repeat(depth - 1)}↳ ${name}` : name,
+			keywords: parent ? `${session.cwd} handoff ${parent.name ?? parent.firstMessage}` : session.cwd,
 			labelColor: isWorking ? "warning" : undefined,
 			hint: { type: "text", text: status ? formatThreadStatus(status) : formatSessionDate(session.modified) },
 			run: () => void this.handleResumeSession(session.path),
@@ -6123,10 +6170,17 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 				run: (query) => this.handleNewThreadFromPalette(query),
 			});
 
-			for (const session of sessions.slice(0, PALETTE_THREAD_LIMIT)) {
-				const entry = this.threadPaletteEntry(session, this.runtimeHost.getThreadStatus(session.path));
-				// Sessions arrive newest first, so each bucket is one contiguous run.
-				entries.push({ ...entry, group: formatThreadTimeBucket(session.modified) });
+			// Handoff children sit under their parent; a subtree keeps its root's time bucket.
+			const forest = orderThreadHierarchy(
+				sessions,
+				(session) => formatThreadTimeBucket(session.modified),
+				PALETTE_THREAD_LIMIT,
+			);
+			for (const { session, depth, parent, group } of forest) {
+				entries.push({
+					...this.threadPaletteEntry(session, this.runtimeHost.getThreadStatus(session.path), depth, parent),
+					group,
+				});
 			}
 
 			return entries;
@@ -7710,6 +7764,46 @@ ${this.packageUpdates.map((pkg) => `• ${pkg}`).join("\n")}`;
 		} catch {
 			// Ignore, will be emitted as an event
 		}
+	}
+
+	/** Enter handoff mode once the effective context crosses the compaction threshold. */
+	private updateHandoffMode(): void {
+		if (!this.settingsManager.getHandoffEnabled()) {
+			this.setHandoffMode(false);
+			return;
+		}
+		const model = this.session.model;
+		if (!model || (model.contextWindow ?? 0) <= 0) return;
+		const usage = this.session.getContextUsage();
+		if (!usage || usage.tokens === null) return;
+		const settings = this.settingsManager.getCompactionSettings(model);
+		this.setHandoffMode(usage.tokens > usage.contextWindow - settings.reserveTokens);
+	}
+
+	private setHandoffMode(on: boolean): void {
+		if (this.handoffMode === on) return;
+		this.handoffMode = on;
+		if (on) {
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(
+				new Text(
+					theme.fg("warning", "Handoff mode: context is nearly full.") +
+						"\n" +
+						theme.fg(
+							"muted",
+							"Type the goal for a new thread; Pi will generate the context transfer and open it.",
+						),
+					1,
+					1,
+				),
+			);
+			this.showStatus("Handoff mode enabled");
+		} else {
+			this.showStatus("Handoff mode off");
+		}
+		this.updateEditorBorderColor();
+		this.updateBackgroundThreadsLabel();
+		this.ui.requestRender();
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {

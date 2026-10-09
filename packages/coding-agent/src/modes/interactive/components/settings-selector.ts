@@ -58,6 +58,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	handoffEnabled: boolean;
 	defaultModel: string;
 	currentModel?: Model<any>;
 	availableDefaultModels: readonly Model<any>[];
@@ -102,6 +103,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onHandoffEnabledChange: (enabled: boolean) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
@@ -483,6 +485,14 @@ export class SettingsSelectorComponent extends Container {
 				label: "Auto-compact",
 				description: "Automatically compact context when it gets too large",
 				currentValue: config.autoCompact ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "handoff",
+				label: "Handoff mode",
+				description:
+					"At the compaction threshold, force a handoff into a new thread instead of compacting in place",
+				currentValue: config.handoffEnabled ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
@@ -873,6 +883,9 @@ export class SettingsSelectorComponent extends Container {
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
+						break;
+					case "handoff":
+						callbacks.onHandoffEnabledChange(newValue === "true");
 						break;
 					case "show-images":
 						callbacks.onShowImagesChange(newValue === "true");

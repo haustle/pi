@@ -11,6 +11,7 @@ type RebindContext = {
 	subscribeToAgent: () => void;
 	updateAvailableProviderCount: () => Promise<void>;
 	updateEditorBorderColor: () => void;
+	updateHandoffMode: () => void;
 	updateTerminalTitle: () => void;
 };
 
@@ -50,6 +51,7 @@ describe("overlapping startup and replacement session rebinds", () => {
 			subscribeToAgent,
 			updateAvailableProviderCount: async () => {},
 			updateEditorBorderColor: () => {},
+			updateHandoffMode: () => {},
 			updateTerminalTitle,
 		};
 

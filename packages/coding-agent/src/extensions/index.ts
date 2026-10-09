@@ -1,5 +1,6 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
 import codemodeExtension from "./codemode/index.ts";
+import handoffExtension from "./handoff/index.ts";
 import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import messageFocusExtension from "./message-focus/index.ts";
@@ -17,4 +18,5 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "pi-image-tools", factory: imageToolsExtension },
 	{ name: "message-focus", factory: messageFocusExtension },
 	{ name: "threads", factory: threadsExtension },
+	{ name: "handoff", factory: handoffExtension },
 ];

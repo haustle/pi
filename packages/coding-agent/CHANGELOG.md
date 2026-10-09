@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added handoff mode. At the compaction threshold, Pi enters handoff mode instead of compacting in place: the input frame signals it, a plain prompt becomes the goal for a new thread, DeepSeek expands it using the current context, and the new thread opens seeded with that prompt. `/handoff [goal]` triggers it manually, the behavior is toggled by "Handoff mode" in `/settings`, and the `ctrl+r` switcher nests handoff children under their parent. A `handoff` tool lets the model start a handoff when explicitly asked, and a `session_query` tool lets a thread ask questions about a previous session's transcript using that session's model.
+
 ## [1.1.0] - 2026-10-07
 
 ### New Features

@@ -765,6 +765,7 @@ export class AgentSession {
 
 	/** Whether `projection`, the current session projection, exceeds the compaction threshold of `model`. */
 	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
+		if (!this._thresholdCompactionEnabled()) return false;
 		if (model.contextWindow <= 0) return false;
 		return shouldCompact(
 			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
@@ -3078,10 +3079,18 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
+		if (this._thresholdCompactionEnabled() && shouldCompact(contextTokens, contextWindow, settings)) {
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
+	}
+
+	/**
+	 * Threshold compaction is skipped while handoff mode is enabled: the interactive layer
+	 * forces a handoff at the same point instead. Overflow recovery compaction still runs.
+	 */
+	private _thresholdCompactionEnabled(): boolean {
+		return !this.settingsManager.getHandoffEnabled();
 	}
 
 	/**

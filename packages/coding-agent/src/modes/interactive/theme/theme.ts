@@ -434,6 +434,10 @@ export class Theme {
 	getBashModeBorderColor(): (str: string) => string {
 		return (str: string) => this.fg("bashMode", str);
 	}
+
+	getHandoffBorderColor(): (str: string) => string {
+		return (str: string) => this.fg("warning", str);
+	}
 }
 
 // ============================================================================
