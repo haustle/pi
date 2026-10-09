@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added a `contentAlign` option to `ScrollView` that parks content shorter than the viewport at the bottom instead of the top.
+
 ## [1.1.0] - 2026-10-07
 
 ### Breaking Changes

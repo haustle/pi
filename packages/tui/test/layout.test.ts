@@ -385,6 +385,21 @@ describe("viewport layout", () => {
 		assert.strictEqual(outer.scrollTop, 1);
 	});
 
+	it("parks short scroll content at the bottom when asked", () => {
+		const build = (contentAlign: "top" | "bottom") =>
+			new ScrollView(new Text("one\ntwo", 0, 0), { follow: "end", contentAlign });
+
+		const top = renderLayoutFrame(build("top"), 10, 5, () => {});
+		assert.deepStrictEqual(visibleLines(top.lines), ["one", "two", "", "", ""]);
+
+		const bottom = renderLayoutFrame(build("bottom"), 10, 5, () => {});
+		assert.deepStrictEqual(visibleLines(bottom.lines), ["", "", "", "one", "two"]);
+
+		// Content taller than the viewport still follows the end instead of shifting.
+		const tall = new ScrollView(new Text("one\ntwo\nthree", 0, 0), { follow: "end", contentAlign: "bottom" });
+		assert.deepStrictEqual(visibleLines(renderLayoutFrame(tall, 10, 2, () => {}).lines), ["two", "three"]);
+	});
+
 	it("rebuilds geometry after content changes", () => {
 		const text = new Text("one", 0, 0);
 		const root = new VStack([text]);

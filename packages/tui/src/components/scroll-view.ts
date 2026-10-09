@@ -8,6 +8,8 @@ export interface ScrollViewOptions {
 	follow?: "none" | "end";
 	primary?: boolean;
 	overscroll?: "chain" | "contain";
+	/** Where to park content shorter than the viewport. Defaults to "top". */
+	contentAlign?: "top" | "bottom";
 	scrollbar?: ScrollViewScrollbar;
 	scrollbarTrackStyle?: (text: string) => string;
 	scrollbarThumbStyle?: (text: string) => string;
@@ -24,6 +26,7 @@ export class ScrollView extends Container {
 	readonly followEnd: boolean;
 	readonly primary: boolean;
 	readonly overscroll: "chain" | "contain";
+	readonly contentAlign: "top" | "bottom";
 	readonly scrollbarTrackStyle: (text: string) => string;
 	readonly scrollbarThumbStyle: (text: string) => string;
 	private currentScrollbar: ScrollViewScrollbar;
@@ -49,6 +52,7 @@ export class ScrollView extends Container {
 		this.followingEnd = this.followEnd;
 		this.primary = options.primary ?? false;
 		this.overscroll = options.overscroll ?? "chain";
+		this.contentAlign = options.contentAlign ?? "top";
 		this.currentScrollbar = options.scrollbar ?? "hidden";
 		this.scrollbarTrackStyle = options.scrollbarTrackStyle ?? ((text) => `\x1b[90m${text}\x1b[39m`);
 		this.scrollbarThumbStyle = options.scrollbarThumbStyle ?? ((text) => `\x1b[37m${text}\x1b[39m`);

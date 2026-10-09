@@ -26,6 +26,7 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		follow: "end",
 		primary: true,
 		overscroll: "chain",
+		contentAlign: "bottom",
 		scrollbar: options.scrollbar ?? "auto",
 		...(options.scrollbarTrackStyle === undefined ? {} : { scrollbarTrackStyle: options.scrollbarTrackStyle }),
 		...(options.scrollbarThumbStyle === undefined ? {} : { scrollbarThumbStyle: options.scrollbarThumbStyle }),

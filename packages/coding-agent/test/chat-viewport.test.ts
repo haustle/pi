@@ -23,4 +23,16 @@ describe("chat viewport", () => {
 		expect(automatic.transcript.scrollbar).toBe("auto");
 		expect(hidden.transcript.scrollbar).toBe("hidden");
 	});
+
+	test("anchors the transcript to the bottom of the viewport", () => {
+		const viewport = createChatViewport({
+			document: new Container(),
+			pendingMessages: new Container(),
+			status: new Container(),
+			editor: new Container(),
+			footer: new Container(),
+		});
+
+		expect(viewport.transcript.contentAlign).toBe("bottom");
+	});
 });

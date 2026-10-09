@@ -152,7 +152,8 @@ function layoutComponent(
 		const contentHeight = childBox.rect.height;
 		const viewportHeight = height === undefined ? contentHeight : Math.max(0, Math.floor(height));
 		node.state.updateLayout(contentHeight, viewportHeight, context.requestRender);
-		translateBox(childBox, previousScrollTop - node.state.scrollTop);
+		const alignOffset = node.state.contentAlign === "bottom" ? Math.max(0, viewportHeight - contentHeight) : 0;
+		translateBox(childBox, previousScrollTop - node.state.scrollTop + alignOffset);
 		const scrollView = node.state as ScrollView;
 		if (node.state.primary || !context.primaryScrollView) context.primaryScrollView = scrollView;
 		const rect = { x, y, width: safeWidth, height: viewportHeight };

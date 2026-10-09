@@ -28,6 +28,7 @@ export interface ScrollLayoutState {
 	readonly scrollTop: number;
 	readonly primary: boolean;
 	readonly overscroll: "chain" | "contain";
+	readonly contentAlign: "top" | "bottom";
 	readonly viewportHeight: number;
 	getContentWidth(width: number): number;
 	/** Set the viewport height before the child renders, so viewport-sized children see the current value. */

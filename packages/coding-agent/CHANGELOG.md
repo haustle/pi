@@ -9,6 +9,7 @@
 ### Changed
 
 - Changed the command palette to rank typed-query results by actionability: commands, then skills, then extensions, then everything else.
+- Changed the fullscreen transcript to grow from the bottom, so short conversations sit just above the input frame instead of the top of the screen.
 
 ## [1.1.0] - 2026-10-07
 
