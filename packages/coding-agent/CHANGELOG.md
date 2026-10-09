@@ -6,6 +6,10 @@
 
 - Added handoff mode. At the compaction threshold, Pi enters handoff mode instead of compacting in place: the input frame signals it, a plain prompt becomes the goal for a new thread, DeepSeek expands it using the current context, and the new thread opens seeded with that prompt. `/handoff [goal]` triggers it manually, the behavior is toggled by "Handoff mode" in `/settings`, and the `ctrl+r` switcher nests handoff children under their parent. A `handoff` tool lets the model start a handoff when explicitly asked, and a `session_query` tool lets a thread ask questions about a previous session's transcript using that session's model.
 
+### Changed
+
+- Changed the command palette to rank typed-query results by actionability: commands, then skills, then extensions, then everything else.
+
 ## [1.1.0] - 2026-10-07
 
 ### New Features
@@ -344,7 +348,6 @@
 - Fixed inherited OpenAI Responses streams from servers that omit `output_index`, such as llama.cpp, running mixed-up tool calls; such streams now end with an error ([#9974](https://github.com/earendil-works/pi/issues/9974)).
 - Fixed inherited Anthropic and OpenAI Codex browser sign-in waiting indefinitely after the provider redirected with an authorization error, and Anthropic sign-in failing when its callback port is in use.
 - Fixed inherited GitHub Copilot Claude Opus 5.5 offering unsupported thinking levels when upstream model metadata is incomplete.
-
 ## [0.87.1] - 2026-09-22
 
 ### New Features

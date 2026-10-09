@@ -74,15 +74,21 @@ function hintText(hint: PaletteHint | undefined): string {
 	return hint.type === "text" ? hint.text : keyText(hint.keybinding);
 }
 
+/** Category order applied while a query is typed, most actionable results first. */
+const QUERY_CATEGORY_ORDER: PaletteCategory[] = ["command", "skill", "extension"];
+
+function queryCategoryRank(category: PaletteCategory): number {
+	const rank = QUERY_CATEGORY_ORDER.indexOf(category);
+	return rank === -1 ? QUERY_CATEGORY_ORDER.length : rank;
+}
+
 /** Entries matching `query`, best match first. Pinned rows stay on top. */
 export function filterPaletteEntries(entries: readonly PaletteEntry[], query: string): PaletteEntry[] {
 	const pinned = entries.filter((entry) => entry.pinned);
 	const rest = entries.filter((entry) => !entry.pinned);
 	if (!query.trim()) return [...pinned, ...rest];
-	return [
-		...pinned,
-		...fuzzyFilter(rest, query, (entry) => `${entry.category} ${entry.label} ${entry.keywords ?? ""}`),
-	];
+	const matched = fuzzyFilter(rest, query, (entry) => `${entry.category} ${entry.label} ${entry.keywords ?? ""}`);
+	return [...pinned, ...matched.sort((a, b) => queryCategoryRank(a.category) - queryCategoryRank(b.category))];
 }
 
 /** A rendered palette row: a group heading or a reference to a filtered entry. */

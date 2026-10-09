@@ -52,6 +52,31 @@ describe("filterPaletteEntries", () => {
 		filterPaletteEntries(entries, "model");
 		expect(entries).toEqual(before);
 	});
+
+	it("ranks commands, then skills, then extensions, then the rest", () => {
+		const mixed = [
+			entry("search threads", "thread"),
+			entry("/search", "command"),
+			entry("search skill", "skill"),
+			entry("search ext", "extension"),
+			entry("search prompt", "prompt"),
+		];
+		expect(filterPaletteEntries(mixed, "search").map((item) => item.label)).toEqual([
+			"/search",
+			"search skill",
+			"search ext",
+			"search threads",
+			"search prompt",
+		]);
+	});
+
+	it("keeps fuzzy ranking within a category", () => {
+		const mixed = [entry("toggle model output", "extension"), entry("model picker", "extension")];
+		expect(filterPaletteEntries(mixed, "model").map((item) => item.label)).toEqual([
+			"model picker",
+			"toggle model output",
+		]);
+	});
 });
 
 describe("initialPaletteSelection", () => {
